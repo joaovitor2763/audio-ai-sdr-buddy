@@ -36,6 +36,8 @@ const Index = () => {
   
   const geminiSessionRef = useRef<Session | null>(null);
   const audioContextPlaybackRef = useRef<AudioContext | null>(null);
+  const audioQueueRef = useRef<AudioBuffer[]>([]);
+  const isPlayingRef = useRef(false);
   const responseQueueRef = useRef<LiveServerMessage[]>([]);
   
   const { toast } = useToast();
@@ -58,6 +60,45 @@ const Index = () => {
 
   const updateQualificationData = (data: Partial<typeof qualificationData>) => {
     setQualificationData(prev => ({ ...prev, ...data }));
+  };
+
+  const playNextAudioChunk = () => {
+    if (audioQueueRef.current.length === 0 || isPlayingRef.current) {
+      return;
+    }
+
+    const audioBuffer = audioQueueRef.current.shift();
+    if (!audioBuffer || !audioContextPlaybackRef.current) {
+      return;
+    }
+
+    isPlayingRef.current = true;
+
+    try {
+      const source = audioContextPlaybackRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      
+      const gainNode = audioContextPlaybackRef.current.createGain();
+      gainNode.gain.value = 1.5;
+      
+      source.connect(gainNode);
+      gainNode.connect(audioContextPlaybackRef.current.destination);
+
+      source.onended = () => {
+        console.log("Audio chunk finished, playing next");
+        isPlayingRef.current = false;
+        // Play next chunk after this one ends
+        setTimeout(() => playNextAudioChunk(), 50);
+      };
+
+      source.start(0);
+      console.log("Playing audio chunk with duration:", audioBuffer.duration, "seconds");
+      
+    } catch (error) {
+      console.error("Error playing audio chunk:", error);
+      isPlayingRef.current = false;
+      setTimeout(() => playNextAudioChunk(), 100);
+    }
   };
 
   const handleAudioMessage = async (inlineData: any) => {
@@ -91,10 +132,9 @@ const Index = () => {
       console.log("Decoded audio bytes length:", audioBytes.length);
 
       // Convert PCM data to AudioBuffer
-      // The API returns 24kHz, 16-bit PCM, mono
       const sampleRate = 24000;
       const channels = 1;
-      const bytesPerSample = 2; // 16-bit
+      const bytesPerSample = 2;
       const numSamples = audioBytes.length / bytesPerSample;
       
       console.log("Number of samples:", numSamples);
@@ -112,8 +152,8 @@ const Index = () => {
       const dataView = new DataView(audioBytes.buffer);
       let maxSample = 0;
       for (let i = 0; i < numSamples; i++) {
-        const sample = dataView.getInt16(i * 2, true); // little-endian
-        const floatSample = sample / 32768.0; // Convert to -1.0 to 1.0 range
+        const sample = dataView.getInt16(i * 2, true);
+        const floatSample = sample / 32768.0;
         channelData[i] = floatSample;
         maxSample = Math.max(maxSample, Math.abs(floatSample));
       }
@@ -121,32 +161,17 @@ const Index = () => {
       console.log("Max sample value:", maxSample);
       console.log("Audio buffer created - duration:", audioBuffer.duration, "seconds");
 
-      // Create and configure audio source
-      const source = audioContextPlaybackRef.current.createBufferSource();
-      source.buffer = audioBuffer;
+      // Add to queue instead of playing immediately
+      audioQueueRef.current.push(audioBuffer);
+      console.log("Audio chunk added to queue. Queue length:", audioQueueRef.current.length);
       
-      // Add gain node for volume control and debugging
-      const gainNode = audioContextPlaybackRef.current.createGain();
-      gainNode.gain.value = 2.0; // Increase volume to ensure it's audible
-      
-      // Connect: source -> gain -> destination
-      source.connect(gainNode);
-      gainNode.connect(audioContextPlaybackRef.current.destination);
-
-      // Add event listeners for debugging
-      source.onended = () => {
-        console.log("Audio playback ended for chunk with max sample:", maxSample);
-      };
-
-      // Start playback immediately
-      source.start(0);
-      
-      console.log("Audio playback started immediately");
-      console.log("AudioContext destination maxChannelCount:", audioContextPlaybackRef.current.destination.maxChannelCount);
-      console.log("Audio chunk queued successfully with gain:", gainNode.gain.value);
+      // Start playing if not already playing
+      if (!isPlayingRef.current) {
+        playNextAudioChunk();
+      }
       
     } catch (error) {
-      console.error("Error playing audio:", error);
+      console.error("Error processing audio:", error);
       console.error("Audio data length:", inlineData.data?.length);
       console.error("MIME type:", inlineData.mimeType);
       console.error("AudioContext state:", audioContextPlaybackRef.current?.state);
@@ -223,6 +248,10 @@ const Index = () => {
       }
 
       console.log("Initial AudioContext state:", audioContextPlaybackRef.current.state);
+      
+      // Reset audio queue
+      audioQueueRef.current = [];
+      isPlayingRef.current = false;
       
       // Initialize Google GenAI
       const ai = new GoogleGenAI({
@@ -379,6 +408,10 @@ Após coletar as informações, use a tool com a function call send_qualificatio
   const endCall = () => {
     // Stop audio processing
     stopAudioProcessing();
+    
+    // Clear audio queue
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
     
     // Close Gemini session
     if (geminiSessionRef.current) {
