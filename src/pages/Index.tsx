@@ -1,3 +1,4 @@
+
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -81,9 +82,13 @@ const Index = () => {
     
     setQualificationData(prev => ({ ...prev, ...data }));
     
-    // Add to transcript to show what was extracted
+    // Add to transcript to show what was extracted - fix object rendering issue
     const extractedInfo = Object.entries(data)
-      .map(([key, value]) => `${key}: ${value}`)
+      .map(([key, value]) => {
+        // Convert any value to string to avoid React child errors
+        const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        return `${key}: ${stringValue}`;
+      })
       .join(", ");
     addToTranscript("System", `✅ Dados extraídos: ${extractedInfo}`);
   };
