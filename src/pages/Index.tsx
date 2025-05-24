@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -86,7 +85,7 @@ const Index = () => {
   };
 
   const handleModelTurn = (message: LiveServerMessage) => {
-    console.log("Received message:", message);
+    console.log("Received Gemini message:", message);
 
     const interrupted = message.serverContent?.interrupted;
     if (interrupted) {
@@ -94,6 +93,22 @@ const Index = () => {
       stopAllAudio();
       const userEntry = handleInterruption();
       if (userEntry) {
+        console.log("Processing interrupted user entry for extraction");
+        extractQualificationData(userEntry, updateQualificationData);
+      }
+    }
+
+    // Handle input transcription with improved timing
+    if (message.serverContent?.inputTranscription) {
+      const transcriptText = message.serverContent.inputTranscription.text || "";
+      const isPartial = message.serverContent.inputTranscription.isPartial || false;
+      
+      console.log("Input transcription received:", transcriptText, "isPartial:", isPartial);
+      
+      // Process transcription immediately, don't wait for turn complete
+      const userEntry = handleUserTranscript(transcriptText, isPartial);
+      if (userEntry) {
+        console.log("Processing finalized user transcript for extraction");
         extractQualificationData(userEntry, updateQualificationData);
       }
     }
@@ -126,18 +141,12 @@ const Index = () => {
       }
     }
 
-    if (message.serverContent?.inputTranscription) {
-      const transcriptText = message.serverContent.inputTranscription.text || "";
-      const userEntry = handleUserTranscript(transcriptText);
-      if (userEntry) {
-        extractQualificationData(userEntry, updateQualificationData);
-      }
-    }
-
     if (message.serverContent?.turnComplete) {
+      console.log("Turn complete detected");
       const entries = handleTurnComplete();
       entries.forEach(entry => {
         if (entry.speaker === "Usuário") {
+          console.log("Processing user entry from turn complete for extraction");
           extractQualificationData(entry, updateQualificationData);
         }
       });

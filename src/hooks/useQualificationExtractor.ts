@@ -1,4 +1,3 @@
-
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -26,6 +25,7 @@ interface ConversationTurn {
 export const useQualificationExtractor = (apiKey: string) => {
   const conversationHistoryRef = useRef<ConversationTurn[]>([]);
   const lastExtractedDataRef = useRef<Partial<QualificationData>>({});
+  const processingRef = useRef<boolean>(false);
 
   const extractQualificationData = useCallback(async (
     newTurn: ConversationTurn,
@@ -42,22 +42,30 @@ export const useQualificationExtractor = (apiKey: string) => {
       return;
     }
 
+    // Prevent concurrent extractions
+    if (processingRef.current) {
+      console.log('Extraction already in progress, skipping');
+      return;
+    }
+
     // Add new turn to conversation history
     conversationHistoryRef.current.push(newTurn);
 
-    // Keep only last 10 turns to avoid token limits
-    if (conversationHistoryRef.current.length > 10) {
-      conversationHistoryRef.current = conversationHistoryRef.current.slice(-10);
+    // Keep only last 15 turns to have more context but avoid token limits
+    if (conversationHistoryRef.current.length > 15) {
+      conversationHistoryRef.current = conversationHistoryRef.current.slice(-15);
     }
 
-    // Only run extraction if we have meaningful user input (more than just greeting words)
+    // Only run extraction if we have meaningful user input
     const userMessage = newTurn.text.toLowerCase().trim();
-    const greetingWords = ['oi', 'olá', 'hello', 'hi', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem'];
+    const greetingWords = ['oi', 'olá', 'hello', 'hi', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem', 'e aí'];
     
-    if (userMessage.length < 3 || greetingWords.some(greeting => userMessage === greeting)) {
+    if (userMessage.length < 2 || greetingWords.some(greeting => userMessage.includes(greeting) && userMessage.length < 15)) {
       console.log('Skipping extraction for greeting or very short message:', userMessage);
       return;
     }
+
+    processingRef.current = true;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -66,46 +74,52 @@ export const useQualificationExtractor = (apiKey: string) => {
         responseMimeType: 'application/json',
         systemInstruction: {
           parts: [{
-            text: `Você é um especialista em extração de dados de qualificação de leads. Analise a conversa e extraia as seguintes informações APENAS quando explicitamente mencionadas pelo usuário:
+            text: `Você é um especialista em extração de dados de qualificação de leads. Analise TODAS as mensagens do usuário na conversa e extraia as seguintes informações APENAS quando explicitamente mencionadas:
 
-CAMPOS OBRIGATÓRIOS:
-- nome_completo: Nome completo da pessoa (APENAS quando a pessoa se apresenta)
+CAMPOS PARA EXTRAIR:
+- nome_completo: Nome completo da pessoa (APENAS quando a pessoa se apresenta claramente)
 - nome_empresa: Nome da empresa/organização (APENAS quando mencionado)
 - como_conheceu_g4: Como a pessoa conheceu o G4 (Google, LinkedIn, indicação, etc.)
-- faturamento_anual_aproximado: Faturamento anual da empresa (ex: "R$ 5.000.000")
+- faturamento_anual_aproximado: Faturamento anual da empresa (ex: "R$ 5.000.000", "5 milhões")
 - total_funcionarios_empresa: Número total de funcionários (número inteiro)
-- setor_empresa: Setor/área de atuação da empresa
+- setor_empresa: Setor/área de atuação da empresa (ex: "tecnologia", "educação")
 - principal_desafio: Principal desafio enfrentado pela empresa
-- melhor_dia_contato_especialista: Melhor dia para contato (ex: "Terça-feira")
-- melhor_horario_contato_especialista: Melhor horário para contato (ex: "10h")
+- melhor_dia_contato_especialista: Melhor dia para contato (ex: "Terça-feira", "segunda")
+- melhor_horario_contato_especialista: Melhor horário para contato (ex: "10h", "manhã")
 - preferencia_contato_especialista: "Ligacao" ou "WhatsApp"
-- telefone: Número de telefone
-- qualificador_nome: Nome do qualificador (sempre "Mari" APENAS quando a conversa está sendo conduzida)
+- telefone: Número de telefone (apenas números limpos)
+- qualificador_nome: Nome do qualificador (sempre "Mari" quando há evidência de qualificação)
 
-INSTRUÇÕES CRÍTICAS:
+REGRAS CRÍTICAS:
 1. Retorne APENAS um objeto JSON válido
-2. Inclua apenas campos que foram EXPLICITAMENTE mencionados pelo USUÁRIO na conversa
-3. NÃO extraia informações de mensagens do sistema ou do qualificador
+2. Inclua apenas campos que foram EXPLICITAMENTE mencionados pelo USUÁRIO
+3. NÃO extraia informações de mensagens do sistema ou do qualificador Mari
 4. NÃO invente ou presuma informações
-5. Para qualificador_nome, só inclua "Mari" se houver evidência clara de que Mari está conduzindo a qualificação
-6. Seja MUITO conservador - é melhor não extrair nada do que extrair informações incorretas
-7. Se não há informações novas ou claras, retorne um objeto vazio: {}
+5. Para nomes, extraia apenas quando há apresentação clara (ex: "Meu nome é João", "Eu sou a Maria")
+6. Para empresas, extraia apenas quando mencionado claramente (ex: "trabalho na Tech Corp", "minha empresa é ABC")
+7. Seja MUITO conservador - é melhor não extrair nada do que extrair informações incorretas
+8. Se não há informações novas claras, retorne um objeto vazio: {}
+9. Para telefone, extraia apenas números, sem formatação
 
-EXEMPLO DE RETORNO:
-{
-  "nome_completo": "João Silva",
-  "nome_empresa": "Tech Solutions"
-}`
+EXEMPLO DE CONVERSA E EXTRAÇÃO:
+Usuário: "Oi, meu nome é João Silva"
+Resposta: {"nome_completo": "João Silva"}
+
+Usuário: "Trabalho na Tech Solutions, somos uma empresa de tecnologia"
+Resposta: {"nome_empresa": "Tech Solutions", "setor_empresa": "tecnologia"}
+
+Usuário: "Temos cerca de 50 funcionários"
+Resposta: {"total_funcionarios_empresa": 50}`
           }]
         },
       };
 
       const model = 'gemini-2.0-flash-lite';
       
-      // Build conversation context (only user messages for extraction)
+      // Build conversation context with ALL user messages
       const userMessages = conversationHistoryRef.current
         .filter(turn => turn.speaker === "Usuário")
-        .map(turn => `Usuario: ${turn.text}`)
+        .map((turn, index) => `Mensagem ${index + 1}: ${turn.text}`)
         .join('\n');
 
       if (!userMessages.trim()) {
@@ -113,12 +127,12 @@ EXEMPLO DE RETORNO:
         return;
       }
 
-      console.log('Extracting qualification data from user messages:', userMessages);
+      console.log('Extracting qualification data from all user messages:', userMessages);
 
       const contents = [
         {
           role: 'user',
-          parts: [{ text: userMessages }],
+          parts: [{ text: `Analise todas essas mensagens do usuário e extraia informações de qualificação:\n\n${userMessages}` }],
         },
       ];
 
@@ -141,14 +155,21 @@ EXEMPLO DE RETORNO:
           return;
         }
 
-        // Only update if we have genuinely new data
-        const hasNewData = Object.keys(extractedData).some(key => 
-          extractedData[key] && extractedData[key] !== lastExtractedDataRef.current[key as keyof QualificationData]
-        );
+        // Filter out data that we already have with the same value
+        const newData: Partial<QualificationData> = {};
+        let hasNewData = false;
+
+        Object.entries(extractedData).forEach(([key, value]) => {
+          if (value && value !== lastExtractedDataRef.current[key as keyof QualificationData]) {
+            newData[key as keyof QualificationData] = value;
+            hasNewData = true;
+          }
+        });
 
         if (hasNewData) {
-          lastExtractedDataRef.current = { ...lastExtractedDataRef.current, ...extractedData };
-          onDataExtracted(extractedData);
+          console.log('New data detected:', newData);
+          lastExtractedDataRef.current = { ...lastExtractedDataRef.current, ...newData };
+          onDataExtracted(newData);
         } else {
           console.log('No new data detected, skipping update');
         }
@@ -159,12 +180,15 @@ EXEMPLO DE RETORNO:
 
     } catch (error) {
       console.error('Error extracting qualification data:', error);
+    } finally {
+      processingRef.current = false;
     }
   }, [apiKey]);
 
   const resetConversation = useCallback(() => {
     conversationHistoryRef.current = [];
     lastExtractedDataRef.current = {};
+    processingRef.current = false;
   }, []);
 
   return {

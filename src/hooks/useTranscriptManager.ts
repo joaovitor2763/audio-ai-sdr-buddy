@@ -16,11 +16,13 @@ export const useTranscriptManager = () => {
   const isAiTurnRef = useRef(false);
   const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const TRANSCRIPT_FINALIZATION_DELAY = 2000;
+  // Reduced delay to capture speech faster
+  const TRANSCRIPT_FINALIZATION_DELAY = 800; // Reduced from 2000ms to 800ms
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
     setTranscript(prev => [...prev, newEntry]);
+    console.log(`Added to transcript: ${speaker}: ${text}`);
     return newEntry;
   }, []);
 
@@ -35,20 +37,24 @@ export const useTranscriptManager = () => {
     return null;
   }, [addToTranscript]);
 
-  const handleUserTranscript = useCallback((transcriptText: string, endOfSpeech?: boolean) => {
-    console.log("User transcript (tentative):", transcriptText, "endOfSpeech:", endOfSpeech);
+  const handleUserTranscript = useCallback((transcriptText: string, isPartial?: boolean) => {
+    console.log("User transcript received:", transcriptText, "isPartial:", isPartial);
     
+    // Always update the pending transcript, even for partial results
     pendingUserTranscriptRef.current = transcriptText;
     isUserTurnRef.current = true;
     
+    // Clear any existing timeout
     if (userTranscriptTimeoutRef.current) {
       clearTimeout(userTranscriptTimeoutRef.current);
     }
     
-    if (endOfSpeech) {
-      console.log("End of speech detected, finalizing transcript immediately");
+    // If this is a final result (not partial), finalize immediately
+    if (!isPartial) {
+      console.log("Final transcript received, finalizing immediately");
       return finalizeUserTranscript();
     } else {
+      // For partial results, set a shorter timeout
       userTranscriptTimeoutRef.current = setTimeout(() => {
         console.log("Transcript timeout reached, finalizing user input");
         finalizeUserTranscript();
@@ -58,7 +64,7 @@ export const useTranscriptManager = () => {
   }, [finalizeUserTranscript]);
 
   const handleAiTranscript = useCallback((text: string) => {
-    console.log("Mari text:", text);
+    console.log("Mari text received:", text);
     isAiTurnRef.current = true;
     pendingAiTranscriptRef.current += text;
   }, []);
@@ -88,6 +94,7 @@ export const useTranscriptManager = () => {
     
     const results = [];
     
+    // First finalize AI transcript if exists
     if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
       console.log("Finalizing AI transcript:", pendingAiTranscriptRef.current);
       results.push(addToTranscript("Mari", pendingAiTranscriptRef.current.trim()));
@@ -95,6 +102,7 @@ export const useTranscriptManager = () => {
       isAiTurnRef.current = false;
     }
     
+    // Then finalize user transcript if exists
     if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
       console.log("Finalizing user transcript on turn complete:", pendingUserTranscriptRef.current);
       const entry = finalizeUserTranscript();
@@ -127,6 +135,7 @@ export const useTranscriptManager = () => {
     pendingAiTranscriptRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
+    setTranscript([]);
   }, []);
 
   return {
