@@ -214,8 +214,8 @@ const Index = () => {
           }
         },
         contextWindowCompression: {
-          triggerTokens: 30000,
-          slidingWindow: { targetTokens: 20000 },
+          triggerTokens: "30000",
+          slidingWindow: { targetTokens: "20000" },
         },
         tools,
         inputAudioTranscription: {},
@@ -315,8 +315,10 @@ Após coletar as informações, use a tool com a function call send_qualificatio
 
             // Send to Gemini
             await session.sendRealtimeInput({
-              mimeType: 'audio/pcm;rate=16000',
-              data: btoa(String.fromCharCode(...new Uint8Array(pcmBuffer)))
+              audio: {
+                data: btoa(String.fromCharCode(...new Uint8Array(pcmBuffer))),
+                mimeType: 'audio/pcm;rate=16000'
+              }
             });
           } catch (error) {
             console.error("Error processing audio:", error);
