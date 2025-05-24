@@ -66,6 +66,16 @@ const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusPr
     return field?.label || fieldKey;
   };
 
+  // Helper function to safely convert any value to string for rendering
+  const safeStringify = (value: any): string => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number') return value.toString();
+    if (typeof value === 'boolean') return value.toString();
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  };
+
   return (
     <div className="space-y-4">
       <Card>
@@ -101,10 +111,12 @@ const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusPr
                   </span>
                   {isCompleted && (
                     <Badge variant="secondary" className="ml-auto text-xs">
-                      {typeof value === 'string' && value.length > 20 ? 
-                        `${value.substring(0, 20)}...` : 
-                        value
-                      }
+                      {(() => {
+                        const stringValue = safeStringify(value);
+                        return stringValue.length > 20 ? 
+                          `${stringValue.substring(0, 20)}...` : 
+                          stringValue;
+                      })()}
                     </Badge>
                   )}
                 </div>
@@ -143,10 +155,12 @@ const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusPr
                       {getFieldLabel(entry.field)}:
                     </span>
                     <span className="text-gray-700">
-                      {typeof entry.value === 'string' && entry.value.length > 30 ? 
-                        `${entry.value.substring(0, 30)}...` : 
-                        entry.value
-                      }
+                      {(() => {
+                        const stringValue = safeStringify(entry.value);
+                        return stringValue.length > 30 ? 
+                          `${stringValue.substring(0, 30)}...` : 
+                          stringValue;
+                      })()}
                     </span>
                   </div>
                 ))}
