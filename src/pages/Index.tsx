@@ -62,23 +62,48 @@ const Index = () => {
 
   const handleAudioMessage = async (inlineData: any) => {
     try {
+      console.log("Processing audio message with mime type:", inlineData.mimeType);
+      
       if (!audioContextPlaybackRef.current) {
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
 
+      // The audio data from Gemini Live API is base64 encoded PCM
       const audioData = atob(inlineData.data);
-      const audioArray = new Uint8Array(audioData.length);
+      const audioBytes = new Uint8Array(audioData.length);
+      
       for (let i = 0; i < audioData.length; i++) {
-        audioArray[i] = audioData.charCodeAt(i);
+        audioBytes[i] = audioData.charCodeAt(i);
       }
 
-      const audioBuffer = await audioContextPlaybackRef.current.decodeAudioData(audioArray.buffer);
+      // Convert PCM data to AudioBuffer
+      // The API returns 24kHz, 16-bit PCM, mono
+      const sampleRate = 24000;
+      const channels = 1;
+      const bytesPerSample = 2; // 16-bit
+      const numSamples = audioBytes.length / bytesPerSample;
+      
+      const audioBuffer = audioContextPlaybackRef.current.createBuffer(channels, numSamples, sampleRate);
+      const channelData = audioBuffer.getChannelData(0);
+      
+      // Convert 16-bit PCM to float32
+      const dataView = new DataView(audioBytes.buffer);
+      for (let i = 0; i < numSamples; i++) {
+        const sample = dataView.getInt16(i * 2, true); // little-endian
+        channelData[i] = sample / 32768.0; // Convert to -1.0 to 1.0 range
+      }
+
+      // Play the audio
       const source = audioContextPlaybackRef.current.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(audioContextPlaybackRef.current.destination);
       source.start();
+      
+      console.log("Audio played successfully");
     } catch (error) {
       console.error("Error playing audio:", error);
+      console.error("Audio data length:", inlineData.data?.length);
+      console.error("MIME type:", inlineData.mimeType);
     }
   };
 
