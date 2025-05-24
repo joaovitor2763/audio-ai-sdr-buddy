@@ -36,12 +36,27 @@ export const useQualificationExtractor = (apiKey: string) => {
       return;
     }
 
+    // Only extract from user messages, not from Mari or System messages
+    if (newTurn.speaker !== "Usuário") {
+      console.log('Skipping extraction for non-user message:', newTurn.speaker);
+      return;
+    }
+
     // Add new turn to conversation history
     conversationHistoryRef.current.push(newTurn);
 
     // Keep only last 10 turns to avoid token limits
     if (conversationHistoryRef.current.length > 10) {
       conversationHistoryRef.current = conversationHistoryRef.current.slice(-10);
+    }
+
+    // Only run extraction if we have meaningful user input (more than just greeting words)
+    const userMessage = newTurn.text.toLowerCase().trim();
+    const greetingWords = ['oi', 'olá', 'hello', 'hi', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem'];
+    
+    if (userMessage.length < 3 || greetingWords.some(greeting => userMessage === greeting)) {
+      console.log('Skipping extraction for greeting or very short message:', userMessage);
+      return;
     }
 
     try {
@@ -51,11 +66,11 @@ export const useQualificationExtractor = (apiKey: string) => {
         responseMimeType: 'application/json',
         systemInstruction: {
           parts: [{
-            text: `Você é um especialista em extração de dados de qualificação de leads. Analise a conversa e extraia as seguintes informações quando disponíveis:
+            text: `Você é um especialista em extração de dados de qualificação de leads. Analise a conversa e extraia as seguintes informações APENAS quando explicitamente mencionadas pelo usuário:
 
 CAMPOS OBRIGATÓRIOS:
-- nome_completo: Nome completo da pessoa
-- nome_empresa: Nome da empresa/organização
+- nome_completo: Nome completo da pessoa (APENAS quando a pessoa se apresenta)
+- nome_empresa: Nome da empresa/organização (APENAS quando mencionado)
 - como_conheceu_g4: Como a pessoa conheceu o G4 (Google, LinkedIn, indicação, etc.)
 - faturamento_anual_aproximado: Faturamento anual da empresa (ex: "R$ 5.000.000")
 - total_funcionarios_empresa: Número total de funcionários (número inteiro)
@@ -65,21 +80,21 @@ CAMPOS OBRIGATÓRIOS:
 - melhor_horario_contato_especialista: Melhor horário para contato (ex: "10h")
 - preferencia_contato_especialista: "Ligacao" ou "WhatsApp"
 - telefone: Número de telefone
-- qualificador_nome: Nome do qualificador (sempre "Mari")
+- qualificador_nome: Nome do qualificador (sempre "Mari" APENAS quando a conversa está sendo conduzida)
 
-INSTRUÇÕES:
+INSTRUÇÕES CRÍTICAS:
 1. Retorne APENAS um objeto JSON válido
-2. Inclua apenas campos que foram mencionados na conversa
-3. Para números de funcionários, use apenas números inteiros
-4. Para telefone, mantenha o formato original mencionado
-5. Seja preciso e não invente informações
-6. Se uma informação foi mencionada de forma parcial ou ambígua, ainda assim a inclua
+2. Inclua apenas campos que foram EXPLICITAMENTE mencionados pelo USUÁRIO na conversa
+3. NÃO extraia informações de mensagens do sistema ou do qualificador
+4. NÃO invente ou presuma informações
+5. Para qualificador_nome, só inclua "Mari" se houver evidência clara de que Mari está conduzindo a qualificação
+6. Seja MUITO conservador - é melhor não extrair nada do que extrair informações incorretas
+7. Se não há informações novas ou claras, retorne um objeto vazio: {}
 
 EXEMPLO DE RETORNO:
 {
   "nome_completo": "João Silva",
-  "nome_empresa": "Tech Solutions",
-  "total_funcionarios_empresa": 50
+  "nome_empresa": "Tech Solutions"
 }`
           }]
         },
@@ -87,17 +102,23 @@ EXEMPLO DE RETORNO:
 
       const model = 'gemini-2.0-flash-lite';
       
-      // Build conversation context
-      const conversationText = conversationHistoryRef.current
-        .map(turn => `${turn.speaker}: ${turn.text}`)
+      // Build conversation context (only user messages for extraction)
+      const userMessages = conversationHistoryRef.current
+        .filter(turn => turn.speaker === "Usuário")
+        .map(turn => `Usuario: ${turn.text}`)
         .join('\n');
 
-      console.log('Extracting qualification data from conversation:', conversationText);
+      if (!userMessages.trim()) {
+        console.log('No user messages to extract from');
+        return;
+      }
+
+      console.log('Extracting qualification data from user messages:', userMessages);
 
       const contents = [
         {
           role: 'user',
-          parts: [{ text: conversationText }],
+          parts: [{ text: userMessages }],
         },
       ];
 
@@ -114,14 +135,22 @@ EXEMPLO DE RETORNO:
         const extractedData = JSON.parse(responseText);
         console.log('Parsed qualification data:', extractedData);
 
-        // Only update if we have new data
+        // Only proceed if we actually extracted some data
+        if (Object.keys(extractedData).length === 0) {
+          console.log('No data extracted, skipping update');
+          return;
+        }
+
+        // Only update if we have genuinely new data
         const hasNewData = Object.keys(extractedData).some(key => 
-          extractedData[key] !== lastExtractedDataRef.current[key as keyof QualificationData]
+          extractedData[key] && extractedData[key] !== lastExtractedDataRef.current[key as keyof QualificationData]
         );
 
         if (hasNewData) {
           lastExtractedDataRef.current = { ...lastExtractedDataRef.current, ...extractedData };
           onDataExtracted(extractedData);
+        } else {
+          console.log('No new data detected, skipping update');
         }
 
       } catch (parseError) {

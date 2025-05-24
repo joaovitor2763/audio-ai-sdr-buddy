@@ -64,9 +64,15 @@ const Index = () => {
     const newEntry = { speaker, text, timestamp: new Date() };
     setTranscript(prev => [...prev, newEntry]);
     
-    // Extract qualification data from this turn
-    if (speaker === "Usuário" || speaker === "Mari") {
-      extractQualificationData(newEntry, updateQualificationData);
+    // Only extract qualification data from actual user input, not system messages or greetings
+    if (speaker === "Usuário" && text.trim().length > 0) {
+      // Don't extract from very short responses or common greetings
+      const cleanText = text.toLowerCase().trim();
+      const isGreeting = ['oi', 'olá', 'ok', 'sim', 'não', 'tudo bem'].includes(cleanText);
+      
+      if (!isGreeting && cleanText.length > 2) {
+        extractQualificationData(newEntry, updateQualificationData);
+      }
     }
   };
 
@@ -75,20 +81,26 @@ const Index = () => {
     
     // Log what was extracted
     Object.entries(data).forEach(([field, value]) => {
-      setExtractionLog(prev => [...prev, { field, value, timestamp: new Date() }]);
+      if (value && value !== "" && value !== 0) {
+        setExtractionLog(prev => [...prev, { field, value, timestamp: new Date() }]);
+      }
     });
     
     setQualificationData(prev => ({ ...prev, ...data }));
     
     // Add to transcript to show what was extracted - fix object rendering issue
     const extractedInfo = Object.entries(data)
+      .filter(([_, value]) => value && value !== "" && value !== 0)
       .map(([key, value]) => {
         // Convert any value to string to avoid React child errors
         const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
         return `${key}: ${stringValue}`;
       })
       .join(", ");
-    addToTranscript("System", `✅ Dados extraídos: ${extractedInfo}`);
+    
+    if (extractedInfo) {
+      addToTranscript("System", `✅ Dados extraídos: ${extractedInfo}`);
+    }
   };
 
   // Utility functions for audio processing
