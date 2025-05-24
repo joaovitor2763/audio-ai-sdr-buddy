@@ -1,3 +1,4 @@
+
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -106,7 +107,7 @@ EXEMPLO DE RETORNO:
         contents,
       });
 
-      const responseText = response.response.text();
+      const responseText = response.text();
       console.log('Raw extraction response:', responseText);
 
       try {
