@@ -107,7 +107,7 @@ EXEMPLO DE RETORNO:
         contents,
       });
 
-      const responseText = response.text();
+      const responseText = response.text;
       console.log('Raw extraction response:', responseText);
 
       try {
