@@ -44,9 +44,9 @@ const Index = () => {
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
 
-  // Audio buffering configuration
-  const BUFFER_SIZE = 5; // Wait for 5 chunks before starting playback
-  const CHUNK_DELAY = 100; // 100ms delay between chunks for smoother playback
+  // Enhanced audio buffering configuration for smoother playback
+  const BUFFER_SIZE = 15; // Wait for 15 chunks before starting playback (increased from 5)
+  const CHUNK_DELAY = 200; // 200ms delay between chunks for much smoother playback (increased from 100ms)
 
   useEffect(() => {
     // Simulated audio level for visualization
@@ -138,9 +138,10 @@ const Index = () => {
       return;
     }
 
-    // Wait for buffer to fill up before starting playback
+    // Wait for larger buffer to fill up before starting playback
     if (audioQueueRef.current.length < BUFFER_SIZE && audioQueueRef.current.length > 0) {
-      setTimeout(() => playNextAudioChunk(), 50);
+      console.log(`Waiting for buffer to fill: ${audioQueueRef.current.length}/${BUFFER_SIZE} chunks`);
+      setTimeout(() => playNextAudioChunk(), 100);
       return;
     }
 
@@ -162,14 +163,14 @@ const Index = () => {
       gainNode.connect(audioContextPlaybackRef.current.destination);
 
       source.onended = () => {
-        console.log("Audio chunk finished, scheduling next with delay");
+        console.log(`Audio chunk finished, queue remaining: ${audioQueueRef.current.length}, scheduling next with ${CHUNK_DELAY}ms delay`);
         isPlayingRef.current = false;
-        // Add delay between chunks for smoother playback
+        // Increased delay between chunks for smoother playback
         setTimeout(() => playNextAudioChunk(), CHUNK_DELAY);
       };
 
       source.start(0);
-      console.log("Playing audio chunk with duration:", audioBuffer.duration, "seconds, queue length:", audioQueueRef.current.length);
+      console.log(`Playing buffered audio chunk, duration: ${audioBuffer.duration}s, queue length: ${audioQueueRef.current.length}`);
       
     } catch (error) {
       console.error("Error playing audio chunk:", error);
