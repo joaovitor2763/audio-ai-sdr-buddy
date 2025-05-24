@@ -65,11 +65,13 @@ const Index = () => {
       console.log("Processing audio message with mime type:", inlineData.mimeType);
       console.log("Audio data length:", inlineData.data?.length);
       
-      if (!audioContextPlaybackRef.current) {
+      // Ensure we have a running AudioContext
+      if (!audioContextPlaybackRef.current || audioContextPlaybackRef.current.state === 'closed') {
+        console.log("Creating new AudioContext for playback");
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
 
-      // Ensure AudioContext is resumed (required by some browsers)
+      // Ensure AudioContext is resumed and running
       if (audioContextPlaybackRef.current.state === 'suspended') {
         console.log("Resuming suspended AudioContext");
         await audioContextPlaybackRef.current.resume();
@@ -125,7 +127,7 @@ const Index = () => {
       
       // Add gain node for volume control and debugging
       const gainNode = audioContextPlaybackRef.current.createGain();
-      gainNode.gain.value = 1.0; // Full volume
+      gainNode.gain.value = 2.0; // Increase volume to ensure it's audible
       
       // Connect: source -> gain -> destination
       source.connect(gainNode);
@@ -133,16 +135,15 @@ const Index = () => {
 
       // Add event listeners for debugging
       source.onended = () => {
-        console.log("Audio playback ended");
+        console.log("Audio playback ended for chunk with max sample:", maxSample);
       };
 
-      // Start playback
-      const startTime = audioContextPlaybackRef.current.currentTime;
-      source.start(startTime);
+      // Start playback immediately
+      source.start(0);
       
-      console.log("Audio playback started at time:", startTime);
-      console.log("AudioContext destination:", audioContextPlaybackRef.current.destination);
-      console.log("Audio played successfully");
+      console.log("Audio playback started immediately");
+      console.log("AudioContext destination maxChannelCount:", audioContextPlaybackRef.current.destination.maxChannelCount);
+      console.log("Audio chunk queued successfully with gain:", gainNode.gain.value);
       
     } catch (error) {
       console.error("Error playing audio:", error);
@@ -211,6 +212,7 @@ const Index = () => {
       
       // Initialize audio context early and ensure it's running
       if (!audioContextPlaybackRef.current) {
+        console.log("Creating initial AudioContext");
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
       
@@ -378,16 +380,12 @@ Após coletar as informações, use a tool com a function call send_qualificatio
     // Stop audio processing
     stopAudioProcessing();
     
-    // Close audio context for playback
-    if (audioContextPlaybackRef.current) {
-      audioContextPlaybackRef.current.close();
-    }
-    
     // Close Gemini session
     if (geminiSessionRef.current) {
       geminiSessionRef.current.close();
     }
-    
+
+    // Keep AudioContext alive but reset state
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
