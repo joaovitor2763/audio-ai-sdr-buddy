@@ -1,3 +1,4 @@
+
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -146,7 +147,7 @@ Resposta: {"total_funcionarios_empresa": 50}`
       console.log('Raw extraction response:', responseText);
 
       try {
-        const extractedData = JSON.parse(responseText);
+        const extractedData = JSON.parse(responseText) as Partial<QualificationData>;
         console.log('Parsed qualification data:', extractedData);
 
         // Only proceed if we actually extracted some data
@@ -160,8 +161,9 @@ Resposta: {"total_funcionarios_empresa": 50}`
         let hasNewData = false;
 
         Object.entries(extractedData).forEach(([key, value]) => {
-          if (value && value !== lastExtractedDataRef.current[key as keyof QualificationData]) {
-            newData[key as keyof QualificationData] = value;
+          const typedKey = key as keyof QualificationData;
+          if (value && value !== lastExtractedDataRef.current[typedKey]) {
+            (newData as any)[typedKey] = value;
             hasNewData = true;
           }
         });

@@ -101,7 +101,8 @@ const Index = () => {
     // Handle input transcription with improved timing
     if (message.serverContent?.inputTranscription) {
       const transcriptText = message.serverContent.inputTranscription.text || "";
-      const isPartial = message.serverContent.inputTranscription.isPartial || false;
+      // Safely access isPartial property with fallback
+      const isPartial = (message.serverContent.inputTranscription as any).isPartial || false;
       
       console.log("Input transcription received:", transcriptText, "isPartial:", isPartial);
       
