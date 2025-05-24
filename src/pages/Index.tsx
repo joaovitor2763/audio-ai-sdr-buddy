@@ -11,6 +11,7 @@ import CallTranscript from "@/components/CallTranscript";
 import QualificationStatus from "@/components/QualificationStatus";
 import { GoogleGenAI, LiveServerMessage, MediaResolution, Modality, Session, Type } from '@google/genai';
 import { useAudioProcessor } from "@/hooks/useAudioProcessor";
+import { useQualificationExtractor } from "@/hooks/useQualificationExtractor";
 
 const Index = () => {
   const [isCallActive, setIsCallActive] = useState(false);
@@ -31,6 +32,7 @@ const Index = () => {
     telefone: "",
     qualificador_nome: "Mari",
   });
+  const [extractionLog, setExtractionLog] = useState<Array<{field: string, value: any, timestamp: Date}>>([]);
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   
@@ -39,14 +41,14 @@ const Index = () => {
   const audioQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
   const responseQueueRef = useRef<LiveServerMessage[]>([]);
-  const currentUserTranscriptRef = useRef<string>("");
   
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
+  const { extractQualificationData, resetConversation } = useQualificationExtractor(apiKey);
 
-  // Optimized audio buffering configuration based on logs analysis
-  const BUFFER_SIZE = 8; // Reduced to 8 chunks - more realistic for actual audio stream
-  const CHUNK_DELAY = 150; // Slightly reduced delay for better responsiveness
+  // Audio buffer configuration
+  const BUFFER_SIZE = 8;
+  const CHUNK_DELAY = 150;
 
   useEffect(() => {
     // Simulated audio level for visualization
@@ -60,141 +62,30 @@ const Index = () => {
   }, [isCallActive, isMuted]);
 
   const addToTranscript = (speaker: string, text: string) => {
-    setTranscript(prev => [...prev, { speaker, text, timestamp: new Date() }]);
+    const newEntry = { speaker, text, timestamp: new Date() };
+    setTranscript(prev => [...prev, newEntry]);
+    
+    // Extract qualification data from this turn
+    if (speaker === "Usuário" || speaker === "Mari") {
+      extractQualificationData(newEntry, updateQualificationData);
+    }
   };
 
   const updateQualificationData = (data: Partial<typeof qualificationData>) => {
     console.log("Updating qualification data:", data);
+    
+    // Log what was extracted
+    Object.entries(data).forEach(([field, value]) => {
+      setExtractionLog(prev => [...prev, { field, value, timestamp: new Date() }]);
+    });
+    
     setQualificationData(prev => ({ ...prev, ...data }));
     
     // Add to transcript to show what was extracted
-    const extractedInfo = Object.entries(data).map(([key, value]) => `${key}: ${value}`).join(", ");
-    addToTranscript("System", `Extracted qualification data: ${extractedInfo}`);
-  };
-
-  // Enhanced qualification data extraction with better logging
-  const extractQualificationFromTranscript = (userText: string) => {
-    console.log("Analyzing text for qualification data:", userText);
-    const text = userText.toLowerCase();
-    const updates: Partial<typeof qualificationData> = {};
-
-    // Extract name patterns - more comprehensive
-    if (text.includes("meu nome") || text.includes("eu sou") || text.includes("me chamo") || text.includes("sou o") || text.includes("sou a")) {
-      const namePatterns = [
-        /(?:meu nome (?:é|eh)|eu sou|me chamo|sou (?:o|a))\s+([a-záàâãéèêíìîóòôõúùû\s]+)/i,
-        /^([a-záàâãéèêíìîóòôõúùû\s]+)$/i // Just the name alone
-      ];
-      
-      for (const pattern of namePatterns) {
-        const nameMatch = userText.match(pattern);
-        if (nameMatch && nameMatch[1].trim().length > 2) {
-          updates.nome_completo = nameMatch[1].trim();
-          break;
-        }
-      }
-    }
-
-    // Extract company name - more patterns
-    if (text.includes("empresa") || text.includes("trabalho") || text.includes("companhia") || text.includes("firma")) {
-      const companyPatterns = [
-        /(?:empresa|trabalho|companhia|firma)(?:\s+(?:é|eh|se chama|chama))?(?:\s+(?:é|eh))?\s+([a-záàâãéèêíìîóòôõúùû\s&\-\.]+)/i,
-        /na\s+([a-záàâãéèêíìîóòôõúùû\s&\-\.]+)/i
-      ];
-      
-      for (const pattern of companyPatterns) {
-        const companyMatch = userText.match(pattern);
-        if (companyMatch && companyMatch[1].trim().length > 2) {
-          updates.nome_empresa = companyMatch[1].trim();
-          break;
-        }
-      }
-    }
-
-    // Extract how they found G4 - more comprehensive
-    if (text.includes("conheci") || text.includes("soube") || text.includes("encontrei") || text.includes("indicação") || text.includes("google") || text.includes("linkedin")) {
-      const sourcePatterns = [
-        /(?:conheci|soube|encontrei)(?:\s+(?:o|a))?\s+g4\s+(.+)/i,
-        /(?:através|por)\s+(.+)/i,
-        /(google|linkedin|indicação|facebook|instagram|youtube)/i
-      ];
-      
-      for (const pattern of sourcePatterns) {
-        const sourceMatch = userText.match(pattern);
-        if (sourceMatch) {
-          updates.como_conheceu_g4 = sourceMatch[1].trim();
-          break;
-        }
-      }
-    }
-
-    // Extract revenue information - enhanced patterns
-    if (text.includes("faturamento") || text.includes("receita") || text.includes("r$") || text.includes("milhões") || text.includes("milhoes") || text.includes("mil")) {
-      const revenuePatterns = [
-        /(r\$\s*[\d.,]+(?:\s*(?:milhões|milhoes|mil))?)/i,
-        /([\d.,]+\s*(?:milhões|milhoes|mil))/i,
-        /(?:cerca de|aproximadamente|por volta de)\s*([\d.,]+)/i
-      ];
-      
-      for (const pattern of revenuePatterns) {
-        const revenueMatch = userText.match(pattern);
-        if (revenueMatch) {
-          updates.faturamento_anual_aproximado = revenueMatch[1].trim();
-          break;
-        }
-      }
-    }
-
-    // Extract number of employees - better patterns
-    if (text.includes("funcionários") || text.includes("funcionarios") || text.includes("pessoas") || text.includes("colaboradores") || text.includes("empregados")) {
-      const employeesPattern = /([\d]+)(?:\s*(?:funcionários|funcionarios|pessoas|colaboradores|empregados))?/i;
-      const employeesMatch = userText.match(employeesPattern);
-      if (employeesMatch) {
-        const num = parseInt(employeesMatch[1]);
-        if (num > 0 && num < 100000) { // Reasonable range
-          updates.total_funcionarios_empresa = num;
-        }
-      }
-    }
-
-    // Extract sector - enhanced
-    if (text.includes("setor") || text.includes("área") || text.includes("area") || text.includes("ramo") || text.includes("segmento")) {
-      const sectorPattern = /(?:setor|área|area|ramo|segmento)(?:\s+(?:é|eh|de|da|do))?\s+([a-záàâãéèêíìîóòôõúùû\s]+)/i;
-      const sectorMatch = userText.match(sectorPattern);
-      if (sectorMatch && sectorMatch[1].trim().length > 2) {
-        updates.setor_empresa = sectorMatch[1].trim();
-      }
-    }
-
-    // Extract main challenge
-    if (text.includes("desafio") || text.includes("problema") || text.includes("dificuldade")) {
-      const challengePattern = /(?:desafio|problema|dificuldade)(?:\s+(?:é|eh|principal|maior))?\s+(.+)/i;
-      const challengeMatch = userText.match(challengePattern);
-      if (challengeMatch && challengeMatch[1].trim().length > 5) {
-        updates.principal_desafio = challengeMatch[1].trim();
-      }
-    }
-
-    // Extract phone number - enhanced
-    const phonePatterns = [
-      /(\(?(?:11|12|13|14|15|16|17|18|19|21|22|24|27|28|31|32|33|34|35|37|38|41|42|43|44|45|46|47|48|49|51|53|54|55|61|62|63|64|65|66|67|68|69|71|73|74|75|77|79|81|82|83|84|85|86|87|88|89|91|92|93|94|95|96|97|98|99)\)?\s*9?\d{4}[-\s]?\d{4})/,
-      /(\(?[\d\s\-\(\)]{10,}\)?)/
-    ];
-    
-    for (const pattern of phonePatterns) {
-      const phoneMatch = userText.match(pattern);
-      if (phoneMatch) {
-        updates.telefone = phoneMatch[1].trim();
-        break;
-      }
-    }
-
-    // Update qualification data if we found anything
-    if (Object.keys(updates).length > 0) {
-      console.log("Extracted qualification data:", updates);
-      updateQualificationData(updates);
-    } else {
-      console.log("No qualification data extracted from:", userText);
-    }
+    const extractedInfo = Object.entries(data)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(", ");
+    addToTranscript("System", `✅ Dados extraídos: ${extractedInfo}`);
   };
 
   const playNextAudioChunk = () => {
@@ -342,18 +233,7 @@ const Index = () => {
       const transcriptText = message.serverContent.inputTranscription.text || "";
       console.log("User transcript:", transcriptText);
       
-      // Accumulate user transcript for better extraction
-      currentUserTranscriptRef.current += " " + transcriptText;
-      
       addToTranscript("Usuário", transcriptText);
-      
-      // Extract qualification data from user responses
-      extractQualificationFromTranscript(currentUserTranscriptRef.current);
-      
-      // Reset accumulated transcript after processing
-      if (transcriptText.includes('.') || transcriptText.includes('?') || transcriptText.includes('!')) {
-        currentUserTranscriptRef.current = "";
-      }
     }
   };
 
@@ -387,7 +267,9 @@ const Index = () => {
       // Reset audio queue and user transcript
       audioQueueRef.current = [];
       isPlayingRef.current = false;
-      currentUserTranscriptRef.current = "";
+      
+      // Reset conversation for extraction
+      resetConversation();
       
       // Initialize Google GenAI
       const ai = new GoogleGenAI({
@@ -549,6 +431,9 @@ Após coletar as informações, use a tool com a function call send_qualificatio
     audioQueueRef.current = [];
     isPlayingRef.current = false;
     
+    // Reset conversation for extraction
+    resetConversation();
+    
     // Close Gemini session
     if (geminiSessionRef.current) {
       geminiSessionRef.current.close();
@@ -689,7 +574,10 @@ Após coletar as informações, use a tool com a function call send_qualificatio
               </Card>
 
               <div className="mt-6">
-                <QualificationStatus data={qualificationData} />
+                <QualificationStatus 
+                  data={qualificationData} 
+                  extractionLog={extractionLog}
+                />
               </div>
             </div>
 
