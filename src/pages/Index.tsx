@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import AudioVisualizer from "@/components/AudioVisualizer";
 import CallTranscript from "@/components/CallTranscript";
 import QualificationStatus from "@/components/QualificationStatus";
+import { GoogleGenAI, LiveServerMessage, MediaResolution, Modality, Session, Type } from '@google/genai';
 
 const Index = () => {
   const [isCallActive, setIsCallActive] = useState(false);
@@ -37,7 +38,9 @@ const Index = () => {
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const geminiSessionRef = useRef<Session | null>(null);
+  const audioContextPlaybackRef = useRef<AudioContext | null>(null);
+  const responseQueueRef = useRef<LiveServerMessage[]>([]);
   
   const { toast } = useToast();
 
@@ -58,6 +61,72 @@ const Index = () => {
 
   const updateQualificationData = (data: Partial<typeof qualificationData>) => {
     setQualificationData(prev => ({ ...prev, ...data }));
+  };
+
+  const handleAudioMessage = async (inlineData: any) => {
+    try {
+      if (!audioContextPlaybackRef.current) {
+        audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
+      }
+
+      const audioData = atob(inlineData.data);
+      const audioArray = new Uint8Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i);
+      }
+
+      const audioBuffer = await audioContextPlaybackRef.current.decodeAudioData(audioArray.buffer);
+      const source = audioContextPlaybackRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextPlaybackRef.current.destination);
+      source.start();
+    } catch (error) {
+      console.error("Error playing audio:", error);
+    }
+  };
+
+  const handleModelTurn = (message: LiveServerMessage) => {
+    console.log("Received message:", message);
+
+    if (message.toolCall) {
+      message.toolCall.functionCalls?.forEach(functionCall => {
+        console.log(`Execute function ${functionCall.name} with arguments:`, functionCall.args);
+        
+        if (functionCall.name === 'send_qualification_webhook') {
+          const args = functionCall.args as any;
+          if (args.qualification_data) {
+            updateQualificationData(args.qualification_data);
+            triggerWebhook(args.qualification_data);
+          }
+        }
+      });
+
+      geminiSessionRef.current?.sendToolResponse({
+        functionResponses: message.toolCall.functionCalls?.map(functionCall => ({
+          id: functionCall.id,
+          name: functionCall.name,
+          response: { result: 'success', message: 'Webhook triggered successfully' }
+        })) ?? []
+      });
+    }
+
+    if (message.serverContent?.modelTurn?.parts) {
+      const part = message.serverContent.modelTurn.parts[0];
+
+      if (part?.inlineData && part.inlineData.mimeType?.includes('audio')) {
+        handleAudioMessage(part.inlineData);
+      }
+
+      if (part?.text) {
+        console.log("Mari:", part.text);
+        addToTranscript("Mari", part.text);
+      }
+    }
+
+    if (message.serverContent?.inputTranscription) {
+      console.log("User transcript:", message.serverContent.inputTranscription.text);
+      addToTranscript("Usuário", message.serverContent.inputTranscription.text || "");
+    }
   };
 
   const startCall = async () => {
@@ -90,25 +159,168 @@ const Index = () => {
       analyserRef.current = audioContextRef.current.createAnalyser();
       const source = audioContextRef.current.createMediaStreamSource(stream);
       source.connect(analyserRef.current);
-      
+
+      // Initialize Google GenAI
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+      });
+
+      const model = 'models/gemini-2.5-flash-preview-native-audio-dialog';
+
+      const tools = [{
+        functionDeclarations: [{
+          name: 'send_qualification_webhook',
+          description: 'Sends lead-qualification data from G4 Educação's Roteiro de Qualificação to a webhook (e.g., Zapier).',
+          parameters: {
+            type: Type.OBJECT,
+            required: ["webhook_url", "qualification_data"],
+            properties: {
+              webhook_url: {
+                type: Type.STRING,
+                description: "The URL of the webhook to send the data to.",
+              },
+              qualification_data: {
+                type: Type.OBJECT,
+                description: "Key information gathered during the qualification call.",
+                required: ["nome_completo", "nome_empresa", "como_conheceu_g4", "faturamento_anual_aproximado", "total_funcionarios_empresa", "setor_empresa", "principal_desafio", "melhor_dia_contato_especialista", "melhor_horario_contato_especialista", "preferencia_contato_especialista", "telefone", "qualificador_nome"],
+                properties: {
+                  nome_completo: { type: Type.STRING, description: "Nome completo do lead." },
+                  nome_empresa: { type: Type.STRING, description: "Nome da empresa." },
+                  como_conheceu_g4: { type: Type.STRING, description: "Como o lead conheceu o G4 Educação." },
+                  faturamento_anual_aproximado: { type: Type.STRING, description: "Faturamento anual aproximado (ex: 'R$ 5.000.000')." },
+                  total_funcionarios_empresa: { type: Type.INTEGER, description: "Total de funcionários na empresa." },
+                  setor_empresa: { type: Type.STRING, description: "Setor de atuação da empresa." },
+                  principal_desafio: { type: Type.STRING, description: "Principal desafio enfrentado pela empresa." },
+                  melhor_dia_contato_especialista: { type: Type.STRING, description: "Melhor dia para o especialista entrar em contato (ex: 'Terça-feira')." },
+                  melhor_horario_contato_especialista: { type: Type.STRING, description: "Melhor horário para contato (ex: '10h')." },
+                  preferencia_contato_especialista: { type: Type.STRING, description: "Canal de preferência para contato do especialista.", enum: ["Ligação", "WhatsApp"] },
+                  telefone: { type: Type.STRING, description: "Número de telefone confirmado para contato." },
+                  qualificador_nome: { type: Type.STRING, description: "Nome do qualificador G4 que conduziu a ligação (ex: Mari)." },
+                },
+              },
+            },
+          },
+        }]
+      }];
+
+      const config = {
+        responseModalities: [Modality.AUDIO],
+        mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM,
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: 'Kore',
+            }
+          }
+        },
+        contextWindowCompression: {
+          triggerTokens: 30000,
+          slidingWindow: { targetTokens: 20000 },
+        },
+        tools,
+        inputAudioTranscription: {},
+        systemInstruction: {
+          parts: [{
+            text: `Você é Mari, uma SDR (Sales Development Representative) da G4 Educação, especializada em qualificação consultiva de leads. Seu objetivo é conduzir uma conversa natural e humana, sempre em português do Brasil, para entender o contexto do lead, coletar as informações essenciais e agendar uma reunião com um especialista.
+
+OBJETIVO PRINCIPAL:
+Conduza a conversa para coletar: Nome, Nome da Empresa, Como conheceu o G4, Porte da empresa (Faturamento e número de funcionários), Setor da empresa, e os Principais Desafios. Ao final, agende uma reunião com um especialista e confirme os dados principais com o lead.
+
+DIRETRIZES DE ATUAÇÃO
+Postura Consultiva: Demonstre curiosidade genuína, faça perguntas claras e diretas, use escuta ativa e, sempre que necessário, peça esclarecimentos de forma natural.
+Comunicação: Adote um tom natural, humano e conversacional. Seja direta, respeitosa e amigável. Não repita literalmente o que o usuário acabou de dizer; apenas sinalize brevemente que entendeu antes de prosseguir (ex: "Entendi", "Certo").
+
+ROTEIRO DE QUALIFICAÇÃO
+1. ABERTURA E IDENTIFICAÇÃO
+"Olá! Eu sou a Mari, da G4 Educação. Tudo bem? Para agilizarmos e eu entender como podemos te ajudar, vou te fazer algumas perguntas rápidas. Pode ser?"
+[Aguardar confirmação]
+"Ótimo! Para começar, qual seu nome completo, por favor?"
+[Aguardar resposta]
+"Obrigada, [Nome do Lead]. E qual é o nome da sua empresa?"
+
+2. CONHECIMENTO, PORTE E SETOR
+"Certo, [Nome do Lead]. E como você conheceu a G4 Educação?"
+"Entendido. Para eu ter uma ideia do porte da [Nome da Empresa], qual é o faturamento anual aproximado e o número total de funcionários?"
+"E qual é o setor de atuação da [Nome da Empresa]?"
+
+3. DESAFIOS PRINCIPAIS
+"Muito bom. Agora, sobre os desafios: qual é o principal desafio que a [Nome da Empresa] está enfrentando atualmente que te fez buscar o G4?"
+
+4. AGENDAMENTO COM ESPECIALISTA
+"Compreendo. Com base no que você me contou, o próximo passo seria uma conversa com um de nossos especialistas para detalhar como o G4 pode auxiliar. Para facilitar, tenho algumas sugestões de horário: que tal na Terça-feira às 10h da manhã, ou talvez na Quarta-feira às 2h da tarde? Alguma dessas opções funciona para você, ou prefere sugerir outro dia e horário na próxima semana?"
+[Aguardar resposta. Se as opções não funcionarem, perguntar:]
+"Sem problemas. Qual seria um bom dia e horário para você na próxima semana, então?"
+[Após definir dia/horário:]
+"Perfeito. E você prefere que o especialista entre em contato por ligação ou via WhatsApp?"
+"Só para confirmar, o telefone [confirmar número, se já tiver, ou perguntar: 'qual o melhor número para esse contato?'] ainda é o ideal?"
+
+5. VALIDAÇÃO E ENCERRAMENTO
+"Excelente, [Nome do Lead]. Agradeço muito pelas informações. Só para recapitular e garantir que anotei tudo corretamente: Você é [Nome do Lead] da [Nome da Empresa], que atua no setor [Setor], fatura aproximadamente [Faturamento] com cerca de [Número Funcionários] funcionários. O principal desafio que vocês enfrentam é [Desafio Principal]. E o agendamento com nosso especialista ficou para [Dia e Hora], por [Canal de preferência]. Essas informações estão corretas?"
+[Aguardar confirmação do lead sobre o resumo dos pontos chave.]
+"Maravilha! Suas informações foram registradas. Nosso especialista entrará em contato conforme combinamos. Muito obrigada pelo seu tempo, [Nome do Lead]. Tenha um ótimo dia!"
+
+Após coletar as informações, use a tool com a function call send_qualification_webhook para enviar os dados, o url do webhook sempre é https://hooks.zapier.com/hooks/catch/9531377/2j18bjs/`
+          }]
+        },
+      };
+
+      // Connect to Gemini Live API
+      const session = await ai.live.connect({
+        model,
+        callbacks: {
+          onopen: function () {
+            console.log('Gemini Live session opened');
+            addToTranscript("System", "Connected to Gemini Live API");
+          },
+          onmessage: function (message: LiveServerMessage) {
+            responseQueueRef.current.push(message);
+            handleModelTurn(message);
+          },
+          onerror: function (e: ErrorEvent) {
+            console.error('Gemini Live error:', e.message);
+            addToTranscript("System", `Error: ${e.message}`);
+          },
+          onclose: function (e: CloseEvent) {
+            console.log('Gemini Live session closed:', e.reason);
+            addToTranscript("System", "Session ended");
+          },
+        },
+        config
+      });
+
+      geminiSessionRef.current = session;
+
       // Setup MediaRecorder for audio capture
       mediaRecorderRef.current = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus'
       });
       
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-          // Convert to base64 and send to Gemini API
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base64Data = (reader.result as string).split(',')[1];
-            wsRef.current?.send(JSON.stringify({
-              type: 'audio',
-              data: base64Data,
-              mimeType: 'audio/webm'
-            }));
-          };
-          reader.readAsDataURL(event.data);
+      mediaRecorderRef.current.ondataavailable = async (event) => {
+        if (event.data.size > 0 && geminiSessionRef.current) {
+          try {
+            // Convert to ArrayBuffer
+            const arrayBuffer = await event.data.arrayBuffer();
+            const audioContext = new AudioContext({ sampleRate: 16000 });
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            // Convert to PCM
+            const pcmData = audioBuffer.getChannelData(0);
+            const pcmBuffer = new ArrayBuffer(pcmData.length * 2);
+            const pcmView = new DataView(pcmBuffer);
+            
+            for (let i = 0; i < pcmData.length; i++) {
+              const sample = Math.max(-1, Math.min(1, pcmData[i]));
+              pcmView.setInt16(i * 2, sample * 0x7FFF, true);
+            }
+
+            // Send to Gemini
+            await session.sendRealtimeInput({
+              mimeType: 'audio/pcm;rate=16000',
+              data: btoa(String.fromCharCode(...new Uint8Array(pcmBuffer)))
+            });
+          } catch (error) {
+            console.error("Error processing audio:", error);
+          }
         }
       };
       
@@ -117,9 +329,6 @@ const Index = () => {
       
       setIsCallActive(true);
       setIsConnecting(false);
-      
-      // Add initial message from Mari
-      addToTranscript("Mari", "Olá! Eu sou a Mari, da G4 Educação. Tudo bem? Para agilizarmos e eu entender como podemos te ajudar, vou te fazer algumas perguntas rápidas. Pode ser?");
       
       toast({
         title: "Call Started",
@@ -131,7 +340,7 @@ const Index = () => {
       setIsConnecting(false);
       toast({
         title: "Error",
-        description: "Failed to start the call. Please check your microphone permissions.",
+        description: "Failed to start the call. Please check your API key and microphone permissions.",
         variant: "destructive",
       });
     }
@@ -148,26 +357,23 @@ const Index = () => {
       audioStreamRef.current.getTracks().forEach(track => track.stop());
     }
     
-    // Close audio context
+    // Close audio contexts
     if (audioContextRef.current) {
       audioContextRef.current.close();
     }
     
-    // Close WebSocket
-    if (wsRef.current) {
-      wsRef.current.close();
+    if (audioContextPlaybackRef.current) {
+      audioContextPlaybackRef.current.close();
+    }
+    
+    // Close Gemini session
+    if (geminiSessionRef.current) {
+      geminiSessionRef.current.close();
     }
     
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
-    
-    // Simulate qualification completion
-    setTimeout(() => {
-      if (qualificationData.nome_completo) {
-        triggerWebhook();
-      }
-    }, 1000);
     
     toast({
       title: "Call Ended",
@@ -184,9 +390,10 @@ const Index = () => {
     }
   };
 
-  const triggerWebhook = async () => {
+  const triggerWebhook = async (data?: any) => {
     try {
       const webhookUrl = "https://hooks.zapier.com/hooks/catch/9531377/2j18bjs/";
+      const payload = data || qualificationData;
       
       const response = await fetch(webhookUrl, {
         method: "POST",
@@ -196,7 +403,7 @@ const Index = () => {
         mode: "no-cors",
         body: JSON.stringify({
           webhook_url: webhookUrl,
-          qualification_data: qualificationData,
+          qualification_data: payload,
           timestamp: new Date().toISOString(),
         }),
       });
@@ -216,27 +423,6 @@ const Index = () => {
         variant: "destructive",
       });
     }
-  };
-
-  // Simulate receiving responses from Mari (in a real implementation, this would come from the Gemini API)
-  const simulateAIResponse = (userInput: string) => {
-    setTimeout(() => {
-      let response = "";
-      
-      if (userInput.toLowerCase().includes("sim") || userInput.toLowerCase().includes("pode")) {
-        response = "Ótimo! Para começar, qual seu nome completo, por favor?";
-      } else if (userInput.includes("João") || userInput.includes("Maria")) {
-        response = `Obrigada, ${userInput}. E qual é o nome da sua empresa?`;
-        updateQualificationData({ nome_completo: userInput });
-      } else if (userInput.toLowerCase().includes("tecnologia") || userInput.toLowerCase().includes("empresa")) {
-        response = "Certo. E como você conheceu a G4 Educação?";
-        updateQualificationData({ nome_empresa: userInput });
-      }
-      
-      if (response) {
-        addToTranscript("Mari", response);
-      }
-    }, 1500);
   };
 
   return (
@@ -329,10 +515,7 @@ const Index = () => {
 
             {/* Transcript */}
             <div className="lg:col-span-2">
-              <CallTranscript 
-                transcript={transcript} 
-                onUserInput={simulateAIResponse}
-              />
+              <CallTranscript transcript={transcript} />
             </div>
           </div>
         )}
