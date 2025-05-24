@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,9 +38,8 @@ const Index = () => {
   
   const geminiSessionRef = useRef<Session | null>(null);
   const audioContextPlaybackRef = useRef<AudioContext | null>(null);
-  const audioQueueRef = useRef<AudioBuffer[]>([]);
-  const isPlayingRef = useRef(false);
-  const responseQueueRef = useRef<LiveServerMessage[]>([]);
+  const nextStartTimeRef = useRef(0);
+  const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
@@ -93,103 +91,80 @@ const Index = () => {
     addToTranscript("System", `✅ Dados extraídos: ${extractedInfo}`);
   };
 
-  const playNextAudioChunk = () => {
-    if (audioQueueRef.current.length === 0 || isPlayingRef.current) {
-      return;
+  // Utility functions for audio processing
+  const decode = (base64Data: string): ArrayBuffer => {
+    const binaryString = atob(base64Data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
     }
+    return bytes.buffer;
+  };
 
-    // Start playing when we have enough buffer
-    if (audioQueueRef.current.length < BUFFER_SIZE && audioQueueRef.current.length > 0) {
-      console.log(`Building buffer: ${audioQueueRef.current.length}/${BUFFER_SIZE} chunks, waiting...`);
-      setTimeout(() => playNextAudioChunk(), 100);
-      return;
+  const decodeAudioData = async (
+    arrayBuffer: ArrayBuffer,
+    audioContext: AudioContext,
+    sampleRate: number,
+    channels: number
+  ): Promise<AudioBuffer> => {
+    const numSamples = arrayBuffer.byteLength / 2;
+    const audioBuffer = audioContext.createBuffer(channels, numSamples, sampleRate);
+    const channelData = audioBuffer.getChannelData(0);
+    
+    const dataView = new DataView(arrayBuffer);
+    for (let i = 0; i < numSamples; i++) {
+      const sample = dataView.getInt16(i * 2, true);
+      channelData[i] = sample / 32768.0;
     }
-
-    const audioBuffer = audioQueueRef.current.shift();
-    if (!audioBuffer || !audioContextPlaybackRef.current) {
-      return;
-    }
-
-    isPlayingRef.current = true;
-
-    try {
-      const source = audioContextPlaybackRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      
-      const gainNode = audioContextPlaybackRef.current.createGain();
-      gainNode.gain.value = 2.0;
-      
-      source.connect(gainNode);
-      gainNode.connect(audioContextPlaybackRef.current.destination);
-
-      source.onended = () => {
-        console.log(`Audio chunk completed, queue: ${audioQueueRef.current.length} chunks remaining`);
-        isPlayingRef.current = false;
-        setTimeout(() => playNextAudioChunk(), CHUNK_DELAY);
-      };
-
-      source.start(0);
-      console.log(`Playing audio chunk (${audioBuffer.duration.toFixed(2)}s), buffer: ${audioQueueRef.current.length} chunks`);
-      
-    } catch (error) {
-      console.error("Error playing audio chunk:", error);
-      isPlayingRef.current = false;
-      setTimeout(() => playNextAudioChunk(), 100);
-    }
+    
+    return audioBuffer;
   };
 
   const handleAudioMessage = async (inlineData: any) => {
     try {
       console.log("Processing audio chunk, mime:", inlineData.mimeType, "size:", inlineData.data?.length);
       
-      // Ensure we have a running AudioContext
-      if (!audioContextPlaybackRef.current || audioContextPlaybackRef.current.state === 'closed') {
+      if (!audioContextPlaybackRef.current) {
         console.log("Creating new AudioContext for playback");
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
 
-      // Ensure AudioContext is resumed and running
       if (audioContextPlaybackRef.current.state === 'suspended') {
         console.log("Resuming suspended AudioContext");
         await audioContextPlaybackRef.current.resume();
       }
 
-      const audioData = atob(inlineData.data);
-      const audioBytes = new Uint8Array(audioData.length);
+      // Decode audio data
+      const audioBuffer = await decodeAudioData(
+        decode(inlineData.data),
+        audioContextPlaybackRef.current,
+        24000,
+        1
+      );
+
+      // Calculate next start time similar to the working example
+      nextStartTimeRef.current = Math.max(
+        nextStartTimeRef.current,
+        audioContextPlaybackRef.current.currentTime
+      );
+
+      // Create and configure audio source
+      const source = audioContextPlaybackRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextPlaybackRef.current.destination);
       
-      for (let i = 0; i < audioData.length; i++) {
-        audioBytes[i] = audioData.charCodeAt(i);
-      }
+      // Track sources and clean up when finished
+      source.addEventListener('ended', () => {
+        audioSourcesRef.current.delete(source);
+        console.log(`Audio source ended, remaining sources: ${audioSourcesRef.current.size}`);
+      });
 
-      const sampleRate = 24000;
-      const channels = 1;
-      const bytesPerSample = 2;
-      const numSamples = audioBytes.length / bytesPerSample;
-
-      if (numSamples === 0) {
-        console.warn("No audio samples to play");
-        return;
-      }
-
-      const audioBuffer = audioContextPlaybackRef.current.createBuffer(channels, numSamples, sampleRate);
-      const channelData = audioBuffer.getChannelData(0);
+      // Start playback at scheduled time
+      source.start(nextStartTimeRef.current);
+      nextStartTimeRef.current = nextStartTimeRef.current + audioBuffer.duration;
+      audioSourcesRef.current.add(source);
       
-      const dataView = new DataView(audioBytes.buffer);
-      for (let i = 0; i < numSamples; i++) {
-        const sample = dataView.getInt16(i * 2, true);
-        const floatSample = sample / 32768.0;
-        channelData[i] = floatSample;
-      }
-
-      // Add to queue
-      audioQueueRef.current.push(audioBuffer);
-      console.log(`Audio chunk queued. Buffer size: ${audioQueueRef.current.length}/${BUFFER_SIZE} chunks`);
-      
-      // Start playing if not already playing and we have enough buffer
-      if (!isPlayingRef.current && audioQueueRef.current.length >= BUFFER_SIZE) {
-        console.log(`Starting playback with ${audioQueueRef.current.length} chunks buffered`);
-        playNextAudioChunk();
-      }
+      console.log(`Audio scheduled to start at ${nextStartTimeRef.current}, duration: ${audioBuffer.duration}s`);
       
     } catch (error) {
       console.error("Error processing audio:", error);
@@ -198,6 +173,21 @@ const Index = () => {
 
   const handleModelTurn = (message: LiveServerMessage) => {
     console.log("Received message:", message);
+
+    // Handle interruption - stop all current audio sources
+    const interrupted = message.serverContent?.interrupted;
+    if (interrupted) {
+      console.log("Handling interruption, stopping all audio sources");
+      for (const source of audioSourcesRef.current.values()) {
+        try {
+          source.stop();
+        } catch (e) {
+          console.warn("Error stopping audio source:", e);
+        }
+        audioSourcesRef.current.delete(source);
+      }
+      nextStartTimeRef.current = 0;
+    }
 
     if (message.toolCall) {
       message.toolCall.functionCalls?.forEach(functionCall => {
@@ -255,32 +245,26 @@ const Index = () => {
     try {
       setIsConnecting(true);
       
-      // Initialize audio context early and ensure it's running
+      // Initialize audio context early
       if (!audioContextPlaybackRef.current) {
         console.log("Creating initial AudioContext");
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
       
-      // Resume audio context if suspended
       if (audioContextPlaybackRef.current.state === 'suspended') {
         await audioContextPlaybackRef.current.resume();
         console.log("AudioContext resumed for playback");
       }
 
-      console.log("Initial AudioContext state:", audioContextPlaybackRef.current.state);
+      // Initialize next start time
+      nextStartTimeRef.current = audioContextPlaybackRef.current.currentTime;
       
-      // Reset audio queue and user transcript
-      audioQueueRef.current = [];
-      isPlayingRef.current = false;
+      // Clear audio sources
+      audioSourcesRef.current.clear();
       
-      // Reset conversation for extraction
       resetConversation();
       
-      // Initialize Google GenAI
-      const ai = new GoogleGenAI({
-        apiKey: apiKey,
-      });
-
+      const ai = new GoogleGenAI({ apiKey: apiKey });
       const model = 'models/gemini-2.5-flash-preview-native-audio-dialog';
 
       const tools = [{
@@ -380,7 +364,6 @@ Após coletar as informações, use a tool com a function call send_qualificatio
         },
       };
 
-      // Connect to Gemini Live API
       const session = await ai.live.connect({
         model,
         callbacks: {
@@ -389,7 +372,6 @@ Após coletar as informações, use a tool com a function call send_qualificatio
             addToTranscript("System", "Connected to Gemini Live API");
           },
           onmessage: function (message: LiveServerMessage) {
-            responseQueueRef.current.push(message);
             handleModelTurn(message);
           },
           onerror: function (e: ErrorEvent) {
@@ -405,8 +387,6 @@ Após coletar as informações, use a tool com a function call send_qualificatio
       });
 
       geminiSessionRef.current = session;
-
-      // Start audio processing with the new AudioWorklet approach
       await startAudioProcessing(session, setAudioLevel);
       
       setIsCallActive(true);
@@ -429,22 +409,25 @@ Após coletar as informações, use a tool com a function call send_qualificatio
   };
 
   const endCall = () => {
-    // Stop audio processing
     stopAudioProcessing();
     
-    // Clear audio queue
-    audioQueueRef.current = [];
-    isPlayingRef.current = false;
+    // Stop all audio sources
+    for (const source of audioSourcesRef.current.values()) {
+      try {
+        source.stop();
+      } catch (e) {
+        console.warn("Error stopping audio source:", e);
+      }
+    }
+    audioSourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
     
-    // Reset conversation for extraction
     resetConversation();
     
-    // Close Gemini session
     if (geminiSessionRef.current) {
       geminiSessionRef.current.close();
     }
 
-    // Keep AudioContext alive but reset state
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
