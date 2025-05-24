@@ -45,7 +45,7 @@ const Index = () => {
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
 
   // Enhanced audio buffering configuration for smoother playback
-  const BUFFER_SIZE = 15; // Wait for 15 chunks before starting playback (increased from 5)
+  const BUFFER_SIZE = 30; // Wait for 30 chunks before starting playback (doubled from 15)
   const CHUNK_DELAY = 200; // 200ms delay between chunks for much smoother playback (increased from 100ms)
 
   useEffect(() => {
