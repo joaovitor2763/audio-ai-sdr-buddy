@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +10,7 @@ import AudioVisualizer from "@/components/AudioVisualizer";
 import CallTranscript from "@/components/CallTranscript";
 import QualificationStatus from "@/components/QualificationStatus";
 import { GoogleGenAI, LiveServerMessage, MediaResolution, Modality, Session, Type } from '@google/genai';
+import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 
 const Index = () => {
   const [isCallActive, setIsCallActive] = useState(false);
@@ -34,15 +34,12 @@ const Index = () => {
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const geminiSessionRef = useRef<Session | null>(null);
   const audioContextPlaybackRef = useRef<AudioContext | null>(null);
   const responseQueueRef = useRef<LiveServerMessage[]>([]);
   
   const { toast } = useToast();
+  const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
 
   useEffect(() => {
     // Simulated audio level for visualization
@@ -142,24 +139,6 @@ const Index = () => {
     try {
       setIsConnecting(true);
       
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        } 
-      });
-      
-      audioStreamRef.current = stream;
-      
-      // Setup audio visualization
-      audioContextRef.current = new AudioContext({ sampleRate: 16000 });
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      source.connect(analyserRef.current);
-
       // Initialize Google GenAI
       const ai = new GoogleGenAI({
         apiKey: apiKey,
@@ -186,7 +165,7 @@ const Index = () => {
                 properties: {
                   nome_completo: { type: Type.STRING, description: "Nome completo do lead." },
                   nome_empresa: { type: Type.STRING, description: "Nome da empresa." },
-                  como_conheceu_g4: { type: Type.STRING, description: "Como o lead conheceu o G4 Educacao." },
+                  como_conheceu_g4: { type: Type.STRING, description: "Como o lead conheceu o G4." },
                   faturamento_anual_aproximado: { type: Type.STRING, description: "Faturamento anual aproximado (ex: R$ 5.000.000)." },
                   total_funcionarios_empresa: { type: Type.INTEGER, description: "Total de funcionarios na empresa." },
                   setor_empresa: { type: Type.STRING, description: "Setor de atuacao da empresa." },
@@ -290,44 +269,8 @@ Após coletar as informações, use a tool com a function call send_qualificatio
 
       geminiSessionRef.current = session;
 
-      // Setup MediaRecorder for audio capture
-      mediaRecorderRef.current = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-      
-      mediaRecorderRef.current.ondataavailable = async (event) => {
-        if (event.data.size > 0 && geminiSessionRef.current) {
-          try {
-            // Convert to ArrayBuffer
-            const arrayBuffer = await event.data.arrayBuffer();
-            const audioContext = new AudioContext({ sampleRate: 16000 });
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            
-            // Convert to PCM
-            const pcmData = audioBuffer.getChannelData(0);
-            const pcmBuffer = new ArrayBuffer(pcmData.length * 2);
-            const pcmView = new DataView(pcmBuffer);
-            
-            for (let i = 0; i < pcmData.length; i++) {
-              const sample = Math.max(-1, Math.min(1, pcmData[i]));
-              pcmView.setInt16(i * 2, sample * 0x7FFF, true);
-            }
-
-            // Send to Gemini
-            await session.sendRealtimeInput({
-              audio: {
-                data: btoa(String.fromCharCode(...new Uint8Array(pcmBuffer))),
-                mimeType: 'audio/pcm;rate=16000'
-              }
-            });
-          } catch (error) {
-            console.error("Error processing audio:", error);
-          }
-        }
-      };
-      
-      // Start recording
-      mediaRecorderRef.current.start(100); // Send data every 100ms
+      // Start audio processing with the new AudioWorklet approach
+      await startAudioProcessing(session, setAudioLevel);
       
       setIsCallActive(true);
       setIsConnecting(false);
@@ -349,21 +292,10 @@ Após coletar as informações, use a tool com a function call send_qualificatio
   };
 
   const endCall = () => {
-    // Stop recording
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
+    // Stop audio processing
+    stopAudioProcessing();
     
-    // Stop audio stream
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-    
-    // Close audio contexts
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-    
+    // Close audio context for playback
     if (audioContextPlaybackRef.current) {
       audioContextPlaybackRef.current.close();
     }
@@ -384,12 +316,8 @@ Após coletar as informações, use a tool com a function call send_qualificatio
   };
 
   const toggleMute = () => {
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = isMuted;
-      });
-      setIsMuted(!isMuted);
-    }
+    toggleAudioMute(isMuted);
+    setIsMuted(!isMuted);
   };
 
   const triggerWebhook = async (data?: any) => {
