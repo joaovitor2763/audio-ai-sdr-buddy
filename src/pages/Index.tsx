@@ -39,9 +39,14 @@ const Index = () => {
   const audioQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
   const responseQueueRef = useRef<LiveServerMessage[]>([]);
+  const currentUserTranscriptRef = useRef<string>("");
   
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
+
+  // Audio buffering configuration
+  const BUFFER_SIZE = 5; // Wait for 5 chunks before starting playback
+  const CHUNK_DELAY = 100; // 100ms delay between chunks for smoother playback
 
   useEffect(() => {
     // Simulated audio level for visualization
@@ -62,8 +67,80 @@ const Index = () => {
     setQualificationData(prev => ({ ...prev, ...data }));
   };
 
+  // Enhanced qualification data extraction from user responses
+  const extractQualificationFromTranscript = (userText: string) => {
+    const text = userText.toLowerCase();
+    const updates: Partial<typeof qualificationData> = {};
+
+    // Extract name patterns
+    if (text.includes("meu nome") || text.includes("eu sou") || text.includes("me chamo")) {
+      const nameMatch = userText.match(/(?:meu nome (?:é|eh)|eu sou|me chamo)\s+([a-záàâãéèêíìîóòôõúùû\s]+)/i);
+      if (nameMatch) {
+        updates.nome_completo = nameMatch[1].trim();
+      }
+    }
+
+    // Extract company name
+    if (text.includes("empresa") || text.includes("trabalho") || text.includes("companhia")) {
+      const companyMatch = userText.match(/(?:empresa|trabalho|companhia)(?:\s+(?:é|eh|se chama))?\s+([a-záàâãéèêíìîóòôõúùû\s&\-\.]+)/i);
+      if (companyMatch) {
+        updates.nome_empresa = companyMatch[1].trim();
+      }
+    }
+
+    // Extract how they found G4
+    if (text.includes("conheci") || text.includes("soube") || text.includes("encontrei")) {
+      const foundMatch = userText.match(/(?:conheci|soube|encontrei)(?:\s+(?:o|a))?\s+g4\s+(.+)/i);
+      if (foundMatch) {
+        updates.como_conheceu_g4 = foundMatch[1].trim();
+      }
+    }
+
+    // Extract revenue information
+    if (text.includes("faturamento") || text.includes("receita") || text.includes("r$") || text.includes("milhões") || text.includes("milhoes")) {
+      const revenueMatch = userText.match(/(r\$\s*[\d.,]+(?:\s*(?:milhões|milhoes|mil))?|[\d.,]+\s*(?:milhões|milhoes|mil))/i);
+      if (revenueMatch) {
+        updates.faturamento_anual_aproximado = revenueMatch[1].trim();
+      }
+    }
+
+    // Extract number of employees
+    if (text.includes("funcionários") || text.includes("funcionarios") || text.includes("pessoas") || text.includes("colaboradores")) {
+      const employeesMatch = userText.match(/([\d]+)(?:\s*(?:funcionários|funcionarios|pessoas|colaboradores))?/i);
+      if (employeesMatch) {
+        updates.total_funcionarios_empresa = parseInt(employeesMatch[1]);
+      }
+    }
+
+    // Extract sector
+    if (text.includes("setor") || text.includes("área") || text.includes("area") || text.includes("ramo")) {
+      const sectorMatch = userText.match(/(?:setor|área|area|ramo)(?:\s+(?:é|eh|de))?\s+([a-záàâãéèêíìîóòôõúùû\s]+)/i);
+      if (sectorMatch) {
+        updates.setor_empresa = sectorMatch[1].trim();
+      }
+    }
+
+    // Extract phone number
+    const phoneMatch = userText.match(/(\(?[\d\s\-\(\)]{10,}\)?)/);
+    if (phoneMatch) {
+      updates.telefone = phoneMatch[1].trim();
+    }
+
+    // Update qualification data if we found anything
+    if (Object.keys(updates).length > 0) {
+      console.log("Extracted qualification data:", updates);
+      updateQualificationData(updates);
+    }
+  };
+
   const playNextAudioChunk = () => {
     if (audioQueueRef.current.length === 0 || isPlayingRef.current) {
+      return;
+    }
+
+    // Wait for buffer to fill up before starting playback
+    if (audioQueueRef.current.length < BUFFER_SIZE && audioQueueRef.current.length > 0) {
+      setTimeout(() => playNextAudioChunk(), 50);
       return;
     }
 
@@ -79,20 +156,20 @@ const Index = () => {
       source.buffer = audioBuffer;
       
       const gainNode = audioContextPlaybackRef.current.createGain();
-      gainNode.gain.value = 1.5;
+      gainNode.gain.value = 2.0;
       
       source.connect(gainNode);
       gainNode.connect(audioContextPlaybackRef.current.destination);
 
       source.onended = () => {
-        console.log("Audio chunk finished, playing next");
+        console.log("Audio chunk finished, scheduling next with delay");
         isPlayingRef.current = false;
-        // Play next chunk after this one ends
-        setTimeout(() => playNextAudioChunk(), 50);
+        // Add delay between chunks for smoother playback
+        setTimeout(() => playNextAudioChunk(), CHUNK_DELAY);
       };
 
       source.start(0);
-      console.log("Playing audio chunk with duration:", audioBuffer.duration, "seconds");
+      console.log("Playing audio chunk with duration:", audioBuffer.duration, "seconds, queue length:", audioQueueRef.current.length);
       
     } catch (error) {
       console.error("Error playing audio chunk:", error);
@@ -118,10 +195,6 @@ const Index = () => {
         await audioContextPlaybackRef.current.resume();
       }
 
-      console.log("AudioContext state:", audioContextPlaybackRef.current.state);
-      console.log("AudioContext sample rate:", audioContextPlaybackRef.current.sampleRate);
-
-      // The audio data from Gemini Live API is base64 encoded PCM
       const audioData = atob(inlineData.data);
       const audioBytes = new Uint8Array(audioData.length);
       
@@ -129,16 +202,10 @@ const Index = () => {
         audioBytes[i] = audioData.charCodeAt(i);
       }
 
-      console.log("Decoded audio bytes length:", audioBytes.length);
-
-      // Convert PCM data to AudioBuffer
       const sampleRate = 24000;
       const channels = 1;
       const bytesPerSample = 2;
       const numSamples = audioBytes.length / bytesPerSample;
-      
-      console.log("Number of samples:", numSamples);
-      console.log("Expected duration:", numSamples / sampleRate, "seconds");
 
       if (numSamples === 0) {
         console.warn("No audio samples to play");
@@ -148,33 +215,25 @@ const Index = () => {
       const audioBuffer = audioContextPlaybackRef.current.createBuffer(channels, numSamples, sampleRate);
       const channelData = audioBuffer.getChannelData(0);
       
-      // Convert 16-bit PCM to float32
       const dataView = new DataView(audioBytes.buffer);
-      let maxSample = 0;
       for (let i = 0; i < numSamples; i++) {
         const sample = dataView.getInt16(i * 2, true);
         const floatSample = sample / 32768.0;
         channelData[i] = floatSample;
-        maxSample = Math.max(maxSample, Math.abs(floatSample));
       }
 
-      console.log("Max sample value:", maxSample);
-      console.log("Audio buffer created - duration:", audioBuffer.duration, "seconds");
-
-      // Add to queue instead of playing immediately
+      // Add to queue
       audioQueueRef.current.push(audioBuffer);
-      console.log("Audio chunk added to queue. Queue length:", audioQueueRef.current.length);
+      console.log("Audio chunk added to queue. Queue length:", audioQueueRef.current.length, "Buffer threshold:", BUFFER_SIZE);
       
-      // Start playing if not already playing
-      if (!isPlayingRef.current) {
+      // Start playing if not already playing and we have enough buffer
+      if (!isPlayingRef.current && audioQueueRef.current.length >= BUFFER_SIZE) {
+        console.log("Starting audio playback with buffer of", audioQueueRef.current.length, "chunks");
         playNextAudioChunk();
       }
       
     } catch (error) {
       console.error("Error processing audio:", error);
-      console.error("Audio data length:", inlineData.data?.length);
-      console.error("MIME type:", inlineData.mimeType);
-      console.error("AudioContext state:", audioContextPlaybackRef.current?.state);
     }
   };
 
@@ -217,8 +276,21 @@ const Index = () => {
     }
 
     if (message.serverContent?.inputTranscription) {
-      console.log("User transcript:", message.serverContent.inputTranscription.text);
-      addToTranscript("Usuário", message.serverContent.inputTranscription.text || "");
+      const transcriptText = message.serverContent.inputTranscription.text || "";
+      console.log("User transcript:", transcriptText);
+      
+      // Accumulate user transcript for better extraction
+      currentUserTranscriptRef.current += " " + transcriptText;
+      
+      addToTranscript("Usuário", transcriptText);
+      
+      // Extract qualification data from user responses
+      extractQualificationFromTranscript(currentUserTranscriptRef.current);
+      
+      // Reset accumulated transcript after processing
+      if (transcriptText.includes('.') || transcriptText.includes('?') || transcriptText.includes('!')) {
+        currentUserTranscriptRef.current = "";
+      }
     }
   };
 
@@ -249,9 +321,10 @@ const Index = () => {
 
       console.log("Initial AudioContext state:", audioContextPlaybackRef.current.state);
       
-      // Reset audio queue
+      // Reset audio queue and user transcript
       audioQueueRef.current = [];
       isPlayingRef.current = false;
+      currentUserTranscriptRef.current = "";
       
       // Initialize Google GenAI
       const ai = new GoogleGenAI({
