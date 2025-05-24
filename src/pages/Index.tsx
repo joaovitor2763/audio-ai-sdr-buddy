@@ -36,6 +36,12 @@ const Index = () => {
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   
+  // New refs for managing turn-based transcription
+  const pendingUserTranscriptRef = useRef<string>("");
+  const pendingAiTranscriptRef = useRef<string>("");
+  const isUserTurnRef = useRef(false);
+  const isAiTurnRef = useRef(false);
+  
   const geminiSessionRef = useRef<Session | null>(null);
   const audioContextPlaybackRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef(0);
@@ -64,15 +70,10 @@ const Index = () => {
     const newEntry = { speaker, text, timestamp: new Date() };
     setTranscript(prev => [...prev, newEntry]);
     
-    // Only extract qualification data from actual user input, not system messages or greetings
+    // Only extract qualification data from complete user turns
     if (speaker === "Usuário" && text.trim().length > 0) {
-      // Don't extract from very short responses or common greetings
-      const cleanText = text.toLowerCase().trim();
-      const isGreeting = ['oi', 'olá', 'ok', 'sim', 'não', 'tudo bem'].includes(cleanText);
-      
-      if (!isGreeting && cleanText.length > 2) {
-        extractQualificationData(newEntry, updateQualificationData);
-      }
+      console.log("Processing complete user turn for extraction:", text);
+      extractQualificationData(newEntry, updateQualificationData);
     }
   };
 
@@ -88,11 +89,10 @@ const Index = () => {
     
     setQualificationData(prev => ({ ...prev, ...data }));
     
-    // Add to transcript to show what was extracted - fix object rendering issue
+    // Add to transcript to show what was extracted
     const extractedInfo = Object.entries(data)
       .filter(([_, value]) => value && value !== "" && value !== 0)
       .map(([key, value]) => {
-        // Convert any value to string to avoid React child errors
         const stringValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
         return `${key}: ${stringValue}`;
       })
@@ -199,6 +199,14 @@ const Index = () => {
         audioSourcesRef.current.delete(source);
       }
       nextStartTimeRef.current = 0;
+      
+      // If user was interrupted, finalize their transcript
+      if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
+        console.log("Finalizing interrupted user transcript:", pendingUserTranscriptRef.current);
+        addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
+        pendingUserTranscriptRef.current = "";
+        isUserTurnRef.current = false;
+      }
     }
 
     if (message.toolCall) {
@@ -227,20 +235,60 @@ const Index = () => {
       const part = message.serverContent.modelTurn.parts[0];
 
       if (part?.inlineData && part.inlineData.mimeType?.includes('audio')) {
+        // Mark AI turn as active
+        isAiTurnRef.current = true;
         handleAudioMessage(part.inlineData);
       }
 
       if (part?.text) {
-        console.log("Mari:", part.text);
-        addToTranscript("Mari", part.text);
+        console.log("Mari text:", part.text);
+        // Accumulate AI text
+        pendingAiTranscriptRef.current += part.text;
       }
     }
 
+    // Handle user input transcription (tentative)
     if (message.serverContent?.inputTranscription) {
       const transcriptText = message.serverContent.inputTranscription.text || "";
-      console.log("User transcript:", transcriptText);
+      console.log("User transcript (tentative):", transcriptText);
       
-      addToTranscript("Usuário", transcriptText);
+      // Accumulate user transcript (don't add to UI yet)
+      pendingUserTranscriptRef.current = transcriptText;
+      isUserTurnRef.current = true;
+    }
+
+    // Handle turn completion
+    if (message.serverContent?.turnComplete) {
+      console.log("Turn completed");
+      
+      // Finalize AI transcript if there was one
+      if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
+        console.log("Finalizing AI transcript:", pendingAiTranscriptRef.current);
+        addToTranscript("Mari", pendingAiTranscriptRef.current.trim());
+        pendingAiTranscriptRef.current = "";
+        isAiTurnRef.current = false;
+      }
+      
+      // Finalize user transcript if there was one
+      if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
+        console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
+        addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
+        pendingUserTranscriptRef.current = "";
+        isUserTurnRef.current = false;
+      }
+    }
+
+    // Handle generation complete (for AI responses)
+    if (message.serverContent?.generationComplete) {
+      console.log("Generation completed");
+      
+      // Finalize AI transcript if there was one
+      if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
+        console.log("Finalizing AI transcript on generation complete:", pendingAiTranscriptRef.current);
+        addToTranscript("Mari", pendingAiTranscriptRef.current.trim());
+        pendingAiTranscriptRef.current = "";
+        isAiTurnRef.current = false;
+      }
     }
   };
 
