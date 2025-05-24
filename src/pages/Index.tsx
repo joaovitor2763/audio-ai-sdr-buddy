@@ -63,10 +63,20 @@ const Index = () => {
   const handleAudioMessage = async (inlineData: any) => {
     try {
       console.log("Processing audio message with mime type:", inlineData.mimeType);
+      console.log("Audio data length:", inlineData.data?.length);
       
       if (!audioContextPlaybackRef.current) {
         audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
       }
+
+      // Ensure AudioContext is resumed (required by some browsers)
+      if (audioContextPlaybackRef.current.state === 'suspended') {
+        console.log("Resuming suspended AudioContext");
+        await audioContextPlaybackRef.current.resume();
+      }
+
+      console.log("AudioContext state:", audioContextPlaybackRef.current.state);
+      console.log("AudioContext sample rate:", audioContextPlaybackRef.current.sampleRate);
 
       // The audio data from Gemini Live API is base64 encoded PCM
       const audioData = atob(inlineData.data);
@@ -76,6 +86,8 @@ const Index = () => {
         audioBytes[i] = audioData.charCodeAt(i);
       }
 
+      console.log("Decoded audio bytes length:", audioBytes.length);
+
       // Convert PCM data to AudioBuffer
       // The API returns 24kHz, 16-bit PCM, mono
       const sampleRate = 24000;
@@ -83,27 +95,60 @@ const Index = () => {
       const bytesPerSample = 2; // 16-bit
       const numSamples = audioBytes.length / bytesPerSample;
       
+      console.log("Number of samples:", numSamples);
+      console.log("Expected duration:", numSamples / sampleRate, "seconds");
+
+      if (numSamples === 0) {
+        console.warn("No audio samples to play");
+        return;
+      }
+
       const audioBuffer = audioContextPlaybackRef.current.createBuffer(channels, numSamples, sampleRate);
       const channelData = audioBuffer.getChannelData(0);
       
       // Convert 16-bit PCM to float32
       const dataView = new DataView(audioBytes.buffer);
+      let maxSample = 0;
       for (let i = 0; i < numSamples; i++) {
         const sample = dataView.getInt16(i * 2, true); // little-endian
-        channelData[i] = sample / 32768.0; // Convert to -1.0 to 1.0 range
+        const floatSample = sample / 32768.0; // Convert to -1.0 to 1.0 range
+        channelData[i] = floatSample;
+        maxSample = Math.max(maxSample, Math.abs(floatSample));
       }
 
-      // Play the audio
+      console.log("Max sample value:", maxSample);
+      console.log("Audio buffer created - duration:", audioBuffer.duration, "seconds");
+
+      // Create and configure audio source
       const source = audioContextPlaybackRef.current.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(audioContextPlaybackRef.current.destination);
-      source.start();
       
+      // Add gain node for volume control and debugging
+      const gainNode = audioContextPlaybackRef.current.createGain();
+      gainNode.gain.value = 1.0; // Full volume
+      
+      // Connect: source -> gain -> destination
+      source.connect(gainNode);
+      gainNode.connect(audioContextPlaybackRef.current.destination);
+
+      // Add event listeners for debugging
+      source.onended = () => {
+        console.log("Audio playback ended");
+      };
+
+      // Start playback
+      const startTime = audioContextPlaybackRef.current.currentTime;
+      source.start(startTime);
+      
+      console.log("Audio playback started at time:", startTime);
+      console.log("AudioContext destination:", audioContextPlaybackRef.current.destination);
       console.log("Audio played successfully");
+      
     } catch (error) {
       console.error("Error playing audio:", error);
       console.error("Audio data length:", inlineData.data?.length);
       console.error("MIME type:", inlineData.mimeType);
+      console.error("AudioContext state:", audioContextPlaybackRef.current?.state);
     }
   };
 
@@ -163,6 +208,19 @@ const Index = () => {
 
     try {
       setIsConnecting(true);
+      
+      // Initialize audio context early and ensure it's running
+      if (!audioContextPlaybackRef.current) {
+        audioContextPlaybackRef.current = new AudioContext({ sampleRate: 24000 });
+      }
+      
+      // Resume audio context if suspended
+      if (audioContextPlaybackRef.current.state === 'suspended') {
+        await audioContextPlaybackRef.current.resume();
+        console.log("AudioContext resumed for playback");
+      }
+
+      console.log("Initial AudioContext state:", audioContextPlaybackRef.current.state);
       
       // Initialize Google GenAI
       const ai = new GoogleGenAI({
