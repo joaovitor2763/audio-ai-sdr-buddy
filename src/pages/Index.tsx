@@ -36,11 +36,13 @@ const Index = () => {
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   
-  // New refs for managing turn-based transcription
+  // Enhanced refs for better transcription management
   const pendingUserTranscriptRef = useRef<string>("");
   const pendingAiTranscriptRef = useRef<string>("");
   const isUserTurnRef = useRef(false);
   const isAiTurnRef = useRef(false);
+  const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const transcriptBufferRef = useRef<string>("");
   
   const geminiSessionRef = useRef<Session | null>(null);
   const audioContextPlaybackRef = useRef<AudioContext | null>(null);
@@ -54,6 +56,7 @@ const Index = () => {
   // Audio buffer configuration
   const BUFFER_SIZE = 8;
   const CHUNK_DELAY = 150;
+  const TRANSCRIPT_FINALIZATION_DELAY = 2000; // Wait 2 seconds before finalizing user transcript
 
   useEffect(() => {
     // Simulated audio level for visualization
@@ -183,6 +186,16 @@ const Index = () => {
     }
   };
 
+  // Enhanced function to finalize user transcript with timeout
+  const finalizeUserTranscript = () => {
+    if (pendingUserTranscriptRef.current.trim()) {
+      console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
+      addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
+      pendingUserTranscriptRef.current = "";
+      isUserTurnRef.current = false;
+    }
+  };
+
   const handleModelTurn = (message: LiveServerMessage) => {
     console.log("Received message:", message);
 
@@ -200,12 +213,16 @@ const Index = () => {
       }
       nextStartTimeRef.current = 0;
       
+      // Clear any pending user transcript timeout
+      if (userTranscriptTimeoutRef.current) {
+        clearTimeout(userTranscriptTimeoutRef.current);
+        userTranscriptTimeoutRef.current = null;
+      }
+      
       // If user was interrupted, finalize their transcript
       if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
         console.log("Finalizing interrupted user transcript:", pendingUserTranscriptRef.current);
-        addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
-        pendingUserTranscriptRef.current = "";
-        isUserTurnRef.current = false;
+        finalizeUserTranscript();
       }
     }
 
@@ -247,19 +264,44 @@ const Index = () => {
       }
     }
 
-    // Handle user input transcription (tentative)
+    // Enhanced user input transcription handling
     if (message.serverContent?.inputTranscription) {
       const transcriptText = message.serverContent.inputTranscription.text || "";
-      console.log("User transcript (tentative):", transcriptText);
+      const isEndOfSpeech = message.serverContent.inputTranscription.endOfSpeech;
       
-      // Accumulate user transcript (don't add to UI yet)
+      console.log("User transcript (tentative):", transcriptText, "endOfSpeech:", isEndOfSpeech);
+      
+      // Update the pending transcript
       pendingUserTranscriptRef.current = transcriptText;
       isUserTurnRef.current = true;
+      
+      // Clear any existing timeout
+      if (userTranscriptTimeoutRef.current) {
+        clearTimeout(userTranscriptTimeoutRef.current);
+      }
+      
+      // If this is marked as end of speech, finalize immediately
+      if (isEndOfSpeech) {
+        console.log("End of speech detected, finalizing transcript immediately");
+        finalizeUserTranscript();
+      } else {
+        // Otherwise, set a timeout to finalize the transcript if no more input comes
+        userTranscriptTimeoutRef.current = setTimeout(() => {
+          console.log("Transcript timeout reached, finalizing user input");
+          finalizeUserTranscript();
+        }, TRANSCRIPT_FINALIZATION_DELAY);
+      }
     }
 
     // Handle turn completion
     if (message.serverContent?.turnComplete) {
       console.log("Turn completed");
+      
+      // Clear any pending transcript timeout
+      if (userTranscriptTimeoutRef.current) {
+        clearTimeout(userTranscriptTimeoutRef.current);
+        userTranscriptTimeoutRef.current = null;
+      }
       
       // Finalize AI transcript if there was one
       if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
@@ -271,10 +313,8 @@ const Index = () => {
       
       // Finalize user transcript if there was one
       if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
-        console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
-        addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
-        pendingUserTranscriptRef.current = "";
-        isUserTurnRef.current = false;
+        console.log("Finalizing user transcript on turn complete:", pendingUserTranscriptRef.current);
+        finalizeUserTranscript();
       }
     }
 
@@ -378,7 +418,10 @@ const Index = () => {
           slidingWindow: { targetTokens: "20000" },
         },
         tools,
-        inputAudioTranscription: {},
+        inputAudioTranscription: {
+          enabled: true,
+          mode: 'CONTINUOUS'
+        },
         systemInstruction: {
           parts: [{
             text: `Você é Mari, uma SDR (Sales Development Representative) da G4 Educação, especializada em qualificação consultiva de leads. Seu objetivo é conduzir uma conversa natural e humana, sempre em português do Brasil, para entender o contexto do lead, coletar as informações essenciais e agendar uma reunião com um especialista.
@@ -469,6 +512,12 @@ Após coletar as informações, use a tool com a function call send_qualificatio
   };
 
   const endCall = () => {
+    // Clear any pending transcript timeout
+    if (userTranscriptTimeoutRef.current) {
+      clearTimeout(userTranscriptTimeoutRef.current);
+      userTranscriptTimeoutRef.current = null;
+    }
+    
     stopAudioProcessing();
     
     // Stop all audio sources
