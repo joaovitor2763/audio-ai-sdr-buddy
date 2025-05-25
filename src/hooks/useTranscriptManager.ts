@@ -32,8 +32,15 @@ export const useTranscriptManager = () => {
       lastUserText: lastUserTextRef.current
     });
     
-    // Filter out noise and ensure we have meaningful content
-    const cleanedText = textToFinalize.replace(/<noise>/g, '').trim();
+    // Filter out noise and clean up spacing issues
+    let cleanedText = textToFinalize.replace(/<noise>/g, '').trim();
+    
+    // Fix spacing issues by removing extra spaces between single characters
+    // This regex finds patterns like "J o ã o" and converts them to "João"
+    cleanedText = cleanedText.replace(/\b(\w)\s+(?=\w)/g, '$1');
+    
+    // Additional cleanup for common Portuguese patterns
+    cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
     
     if (cleanedText && cleanedText !== lastUserTextRef.current && cleanedText.length >= 2) {
       console.log("Adding finalized user transcript:", cleanedText);
@@ -70,10 +77,19 @@ export const useTranscriptManager = () => {
       pendingUserTranscriptRef.current = "";
     }
     
-    // Accumulate the fragments - this is the key fix
+    // Smart accumulation - handle fragments better
     if (pendingUserTranscriptRef.current) {
-      // Add space between fragments if needed and not already present
-      const needsSpace = !pendingUserTranscriptRef.current.endsWith(' ') && !trimmedText.startsWith(' ');
+      const lastChar = pendingUserTranscriptRef.current.slice(-1);
+      const firstChar = trimmedText.charAt(0);
+      
+      // If the previous fragment ends with a letter and current starts with a letter,
+      // they might be part of the same word - don't add space
+      const needsSpace = !(
+        /[a-zA-ZÀ-ÿ]/.test(lastChar) && 
+        /[a-zA-ZÀ-ÿ]/.test(firstChar) &&
+        trimmedText.length <= 3  // Short fragments are likely word continuations
+      ) && !pendingUserTranscriptRef.current.endsWith(' ') && !trimmedText.startsWith(' ');
+      
       pendingUserTranscriptRef.current += (needsSpace ? ' ' : '') + trimmedText;
     } else {
       pendingUserTranscriptRef.current = trimmedText;

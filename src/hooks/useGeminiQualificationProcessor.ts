@@ -50,14 +50,14 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
     // Add to conversation buffer
     conversationBufferRef.current.push(newEntry);
     
-    // Keep only last 15 entries for better context
-    if (conversationBufferRef.current.length > 15) {
-      conversationBufferRef.current = conversationBufferRef.current.slice(-15);
+    // Keep only last 20 entries for better context
+    if (conversationBufferRef.current.length > 20) {
+      conversationBufferRef.current = conversationBufferRef.current.slice(-20);
     }
 
-    // Only process meaningful entries (longer than 10 characters)
-    if (newEntry.text.trim().length < 10) {
-      console.log('Skipping qualification processing for short text:', newEntry.text);
+    // Process any meaningful entry
+    if (newEntry.text.trim().length < 3) {
+      console.log('Skipping qualification processing for very short text:', newEntry.text);
       return;
     }
 
@@ -67,9 +67,9 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Rate limiting - process at most every 3 seconds
+    // Reduced rate limiting - process at most every 2 seconds
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 3000) {
+    if (now - lastProcessTimeRef.current < 2000) {
       console.log('Rate limiting qualification processing');
       return;
     }
@@ -92,13 +92,13 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
           {
             text: `Você é um especialista em análise de dados de qualificação de leads para a G4 Educação.
 
-IMPORTANTE: Analise TODA a conversa para extrair informações de qualificação. Procure por informações EXPLICITAMENTE mencionadas.
+IMPORTANTE: Analise TODA a conversa para extrair informações de qualificação. Procure por informações EXPLICITAMENTE mencionadas e use contexto para identificar dados implícitos.
 
 CAMPOS PARA EXTRAIR:
-- nome_completo: Nome completo da pessoa (ex: "João Silva", "Maria Santos")
+- nome_completo: Nome completo da pessoa (ex: "João Silva", "Maria Santos", "João Vítor")
 - nome_empresa: Nome da empresa/organização (ex: "G4 Educação", "Microsoft", "Banco do Brasil")
-- como_conheceu_g4: Como conheceu o G4 (ex: "Google", "LinkedIn", "indicação", "Instagram")
-- faturamento_anual_aproximado: Faturamento anual em texto (ex: "R$ 5.000.000", "3 milhões", "300 mil reais")
+- como_conheceu_g4: Como conheceu o G4 (ex: "Google", "LinkedIn", "indicação", "Instagram", "conteúdos no Instagram")
+- faturamento_anual_aproximado: Faturamento anual em texto (ex: "R$ 5.000.000", "5 milhões", "500 mil reais")
 - total_funcionarios_empresa: Número de funcionários (ex: 50, 100, 250)
 - setor_empresa: Setor de atuação (ex: "educação", "tecnologia", "saúde", "financeiro")
 - principal_desafio: Principal desafio da empresa (ex: "captação de alunos", "gestão de processos")
@@ -107,6 +107,12 @@ CAMPOS PARA EXTRAIR:
 - preferencia_contato_especialista: "Ligacao" ou "WhatsApp"
 - telefone: Número de telefone (apenas números)
 
+CONTEXTO IMPORTANTE:
+- Quando alguém diz trabalhar "na G4 Educação" ou mencionar "G4 Educação", isso é o nome da empresa
+- "Instagram", "Insta", "conteúdos do Instagram" = como_conheceu_g4: "Instagram"
+- Números de funcionários devem ser extraídos como números inteiros
+- Faturamento deve manter formato mencionado (ex: "5 milhões", "500 mil")
+
 DADOS ATUAIS:
 ${JSON.stringify(currentData, null, 2)}
 
@@ -114,20 +120,20 @@ CONVERSA COMPLETA:
 ${conversationText}
 
 INSTRUÇÕES:
-1. Analise TODO o contexto da conversa
-2. Extraia APENAS informações que foram CLARAMENTE mencionadas
+1. Analise TODO o contexto da conversa desde o início
+2. Extraia informações que foram CLARAMENTE mencionadas OU que podem ser deduzidas do contexto
 3. Para números de funcionários, extraia apenas o número (ex: 250, não "250 funcionários")
 4. Para faturamento, mantenha o formato original mencionado
-5. Se uma informação for mencionada mas já existe nos dados atuais, não a inclua novamente
+5. Se uma informação foi mencionada mas já existe nos dados atuais E é a mesma, não a inclua novamente
 6. Retorne APENAS campos novos ou atualizados
 7. Se nenhuma informação nova, retorne: {}
 
-EXEMPLOS:
-Conversa: "Meu nome é João Silva, trabalho na Microsoft que tem 300 funcionários"
-Resposta: {"nome_completo": "João Silva", "nome_empresa": "Microsoft", "total_funcionarios_empresa": 300}
-
-Conversa: "Nossa empresa fatura cerca de 5 milhões por ano, somos do setor de tecnologia"
-Resposta: {"faturamento_anual_aproximado": "5 milhões", "setor_empresa": "tecnologia"}
+EXEMPLOS BASEADOS NA CONVERSA:
+- "Meu nome é João Vítor" → {"nome_completo": "João Vítor"}
+- "G4 Educação" → {"nome_empresa": "G4 Educação"}
+- "conheceu através de conteúdos no Instagram" → {"como_conheceu_g4": "Instagram"}
+- "empresa tem faturamento aproximado de 500 mil por ano e 250 funcionários" → {"faturamento_anual_aproximado": "500 mil", "total_funcionarios_empresa": 250}
+- "empresa atua no setor de educação" → {"setor_empresa": "educação"}
 
 RESPOSTA (JSON apenas):`
           }
@@ -140,7 +146,7 @@ RESPOSTA (JSON apenas):`
           role: 'user',
           parts: [
             {
-              text: `Analise esta conversa e extraia dados de qualificação:\n${conversationText}`
+              text: `Analise esta conversa completa e extraia TODOS os dados de qualificação mencionados:\n${conversationText}`
             },
           ],
         },
