@@ -24,6 +24,8 @@ export const useSimplifiedTranscriptManager = () => {
   const turnCounterRef = useRef(0);
   const pendingUserTranscriptRef = useRef<string>("");
   const pendingAiTranscriptRef = useRef<string>("");
+  const lastUserEntryRef = useRef<string>("");
+  const lastAiEntryRef = useRef<string>("");
 
   const generateTurnId = useCallback(() => {
     turnCounterRef.current += 1;
@@ -52,6 +54,16 @@ export const useSimplifiedTranscriptManager = () => {
   const addToTranscript = useCallback((speaker: string, text: string, turnId: string) => {
     const cleanedText = cleanTranscriptText(text);
     if (!cleanedText) return null;
+
+    // Skip if the new text is exactly the same as the last entry from this speaker
+    if (speaker === 'Usuário' && cleanedText === lastUserEntryRef.current) {
+      console.log(`⚠️ Skipping duplicate user entry: "${cleanedText}"`);
+      return null;
+    }
+    if (speaker === 'Mari' && cleanedText === lastAiEntryRef.current) {
+      console.log(`⚠️ Skipping duplicate AI entry: "${cleanedText}"`);
+      return null;
+    }
     
     const newEntry: TranscriptEntry = { 
       speaker, 
@@ -79,10 +91,16 @@ export const useSimplifiedTranscriptManager = () => {
         console.log(`⚠️ Duplicate prevented: ${speaker}: ${cleanedText}`);
         return prev;
       }
-      
+
       return [...prev, newEntry];
     });
-    
+
+    if (speaker === 'Usuário') {
+      lastUserEntryRef.current = cleanedText;
+    } else if (speaker === 'Mari') {
+      lastAiEntryRef.current = cleanedText;
+    }
+
     return newEntry;
   }, [cleanTranscriptText]);
 
@@ -108,28 +126,48 @@ export const useSimplifiedTranscriptManager = () => {
     }
 
     console.log(`🎤 User transcript received: "${cleanedText}"`);
-    
-    // If no current turn, start one
+
+    // Ignore duplicate updates from the Live API
+    if (
+      cleanedText === pendingUserTranscriptRef.current ||
+      cleanedText === lastUserEntryRef.current
+    ) {
+      console.log(`⚠️ Duplicate user transcript ignored: "${cleanedText}"`);
+      return null;
+    }
+
     if (!currentTurnRef.current) {
       startNewTurn();
     }
-    
-    // For Live API, we get the complete transcript, not incremental
-    pendingUserTranscriptRef.current = cleanedText;
-    
-    if (currentTurnRef.current) {
-      currentTurnRef.current.userTranscript = cleanedText;
+
+    // Accumulate partial transcripts from the Live API
+    if (pendingUserTranscriptRef.current) {
+      if (!pendingUserTranscriptRef.current.includes(cleanedText)) {
+        pendingUserTranscriptRef.current += ` ${cleanedText}`;
+      }
+    } else {
+      pendingUserTranscriptRef.current = cleanedText;
     }
-    
-    return null; // Don't add to transcript yet, wait for turn completion
+
+    if (currentTurnRef.current) {
+      currentTurnRef.current.userTranscript = pendingUserTranscriptRef.current;
+    }
+
+    return null; // Wait for turn completion to add to transcript
   }, [cleanTranscriptText, startNewTurn]);
 
   const handleAiTranscript = useCallback((text: string) => {
     const cleanedText = cleanTranscriptText(text);
     if (!cleanedText) return;
-    
+
     console.log(`🤖 AI transcript received: "${cleanedText}"`);
-    
+
+    // Ignore duplicate updates from the Live API
+    if (cleanedText === pendingAiTranscriptRef.current || cleanedText === lastAiEntryRef.current) {
+      console.log(`⚠️ Duplicate AI transcript ignored: "${cleanedText}"`);
+      return;
+    }
+
     // For AI responses, we can accumulate as they come in
     if (pendingAiTranscriptRef.current && !pendingAiTranscriptRef.current.includes(cleanedText)) {
       pendingAiTranscriptRef.current += " " + cleanedText;
@@ -144,45 +182,43 @@ export const useSimplifiedTranscriptManager = () => {
 
   const handleGenerationComplete = useCallback(() => {
     console.log(`🎯 Generation complete`);
-    
-    if (!currentTurnRef.current) return null;
-    
-    // Add AI transcript when generation is complete
-    if (pendingAiTranscriptRef.current.trim()) {
-      const aiEntry = addToTranscript(
-        "Mari", 
-        pendingAiTranscriptRef.current.trim(),
-        currentTurnRef.current.turnId
-      );
-      pendingAiTranscriptRef.current = "";
-      return aiEntry;
-    }
-    
+    // We wait for turnComplete to actually commit transcripts
     return null;
-  }, [addToTranscript]);
+  }, []);
 
   const handleTurnComplete = useCallback(() => {
     console.log(`🏁 Turn complete`);
-    
+
     if (!currentTurnRef.current) return [];
-    
+
     const results: TranscriptEntry[] = [];
-    
+
     // Add user transcript if exists
     if (pendingUserTranscriptRef.current.trim()) {
       const userEntry = addToTranscript(
-        "Usuário", 
+        "Usuário",
         pendingUserTranscriptRef.current.trim(),
         currentTurnRef.current.turnId
       );
       if (userEntry) results.push(userEntry);
       pendingUserTranscriptRef.current = "";
     }
-    
+
+    // Add AI transcript after the user entry
+    if (pendingAiTranscriptRef.current.trim()) {
+      const aiEntry = addToTranscript(
+        "Mari",
+        pendingAiTranscriptRef.current.trim(),
+        currentTurnRef.current.turnId
+      );
+      if (aiEntry) results.push(aiEntry);
+      pendingAiTranscriptRef.current = "";
+    }
+
     // Mark turn as complete
     currentTurnRef.current.isComplete = true;
     currentTurnRef.current.endTime = new Date();
-    
+
     // Reset for next turn
     currentTurnRef.current = null;
     
