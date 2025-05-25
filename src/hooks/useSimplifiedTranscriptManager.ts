@@ -30,29 +30,53 @@ export const useSimplifiedTranscriptManager = () => {
     return `turn-${turnCounterRef.current}-${Date.now()}`;
   }, []);
 
+  // Improved text cleaning function
+  const cleanTranscriptText = useCallback((text: string) => {
+    if (!text) return "";
+    
+    // Remove noise markers and clean up the text
+    let cleaned = text
+      .replace(/<noise>/gi, "")
+      .replace(/\[noise\]/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    
+    // Filter out very short or meaningless content
+    if (cleaned.length < 2 || cleaned === "." || cleaned === "," || cleaned === "?") {
+      return "";
+    }
+    
+    return cleaned;
+  }, []);
+
   const addToTranscript = useCallback((speaker: string, text: string, turnId: string) => {
-    if (!text.trim()) return null;
+    const cleanedText = cleanTranscriptText(text);
+    if (!cleanedText) return null;
     
     const newEntry: TranscriptEntry = { 
       speaker, 
-      text: text.trim(), 
+      text: cleanedText, 
       timestamp: new Date(),
       turnId
     };
     
-    console.log(`📝 Adding to transcript: ${speaker}: ${text} (Turn: ${turnId})`);
+    console.log(`📝 Adding to transcript: ${speaker}: ${cleanedText} (Turn: ${turnId})`);
     
     setTranscript(prev => {
-      // Check for exact duplicates in the last few entries
-      const recentEntries = prev.slice(-3);
-      const isDuplicate = recentEntries.some(entry => 
-        entry.speaker === speaker && 
-        entry.text === text.trim() &&
-        (Date.now() - entry.timestamp.getTime()) < 5000
-      );
+      // More sophisticated duplicate detection
+      const recentEntries = prev.slice(-5);
+      const isDuplicate = recentEntries.some(entry => {
+        const timeDiff = Date.now() - entry.timestamp.getTime();
+        const isSameSpeaker = entry.speaker === speaker;
+        const isSimilarText = entry.text === cleanedText || 
+                             (entry.text.includes(cleanedText) && cleanedText.length > 5) ||
+                             (cleanedText.includes(entry.text) && entry.text.length > 5);
+        
+        return isSameSpeaker && isSimilarText && timeDiff < 10000; // 10 second window
+      });
       
       if (isDuplicate) {
-        console.log(`⚠️ Duplicate prevented: ${speaker}: ${text}`);
+        console.log(`⚠️ Duplicate prevented: ${speaker}: ${cleanedText}`);
         return prev;
       }
       
@@ -60,7 +84,7 @@ export const useSimplifiedTranscriptManager = () => {
     });
     
     return newEntry;
-  }, []);
+  }, [cleanTranscriptText]);
 
   const startNewTurn = useCallback(() => {
     const turnId = generateTurnId();
@@ -77,39 +101,46 @@ export const useSimplifiedTranscriptManager = () => {
   }, [generateTurnId]);
 
   const handleUserTranscript = useCallback((transcriptText: string) => {
-    if (!transcriptText.trim() || transcriptText.trim() === '<noise>') {
+    const cleanedText = cleanTranscriptText(transcriptText);
+    if (!cleanedText) {
+      console.log(`🎤 User transcript filtered out: "${transcriptText}"`);
       return null;
     }
 
-    console.log(`🎤 User transcript received: "${transcriptText}"`);
+    console.log(`🎤 User transcript received: "${cleanedText}"`);
     
     // If no current turn, start one
     if (!currentTurnRef.current) {
       startNewTurn();
     }
     
-    // Accumulate user transcript (Live API sends incremental updates)
-    pendingUserTranscriptRef.current = transcriptText.trim();
+    // For Live API, we get the complete transcript, not incremental
+    pendingUserTranscriptRef.current = cleanedText;
     
     if (currentTurnRef.current) {
-      currentTurnRef.current.userTranscript = transcriptText.trim();
+      currentTurnRef.current.userTranscript = cleanedText;
     }
     
     return null; // Don't add to transcript yet, wait for turn completion
-  }, [startNewTurn]);
+  }, [cleanTranscriptText, startNewTurn]);
 
   const handleAiTranscript = useCallback((text: string) => {
-    if (!text.trim()) return;
+    const cleanedText = cleanTranscriptText(text);
+    if (!cleanedText) return;
     
-    console.log(`🤖 AI transcript received: "${text}"`);
+    console.log(`🤖 AI transcript received: "${cleanedText}"`);
     
-    // Accumulate AI transcript
-    pendingAiTranscriptRef.current += text;
+    // For AI responses, we can accumulate as they come in
+    if (pendingAiTranscriptRef.current && !pendingAiTranscriptRef.current.includes(cleanedText)) {
+      pendingAiTranscriptRef.current += " " + cleanedText;
+    } else if (!pendingAiTranscriptRef.current) {
+      pendingAiTranscriptRef.current = cleanedText;
+    }
     
     if (currentTurnRef.current) {
-      currentTurnRef.current.aiTranscript += text;
+      currentTurnRef.current.aiTranscript = pendingAiTranscriptRef.current;
     }
-  }, []);
+  }, [cleanTranscriptText]);
 
   const handleGenerationComplete = useCallback(() => {
     console.log(`🎯 Generation complete`);

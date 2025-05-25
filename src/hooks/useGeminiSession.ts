@@ -61,14 +61,16 @@ export const useGeminiSession = () => {
           prebuiltVoiceConfig: {
             voiceName: 'Kore',
           }
-        }
+        },
+        // Set language to Portuguese for better transcription
+        languageCode: 'pt-BR'
       },
       contextWindowCompression: {
         triggerTokens: "30000",
         slidingWindow: { targetTokens: "20000" },
       },
       tools,
-      // Enable both input and output transcription with optimal settings
+      // Optimized transcription settings for Portuguese
       inputAudioTranscription: {
         enabled: true,
         mode: 'CONTINUOUS'
@@ -76,13 +78,14 @@ export const useGeminiSession = () => {
       outputAudioTranscription: {
         enabled: true
       },
+      // Improved activity detection settings
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-          prefixPaddingMs: 300,
-          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
-          silenceDurationMs: 1000
+          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_MEDIUM, // Changed from HIGH to MEDIUM
+          prefixPaddingMs: 500, // Increased from 300 to better capture start of speech
+          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_MEDIUM, // Changed from HIGH to MEDIUM
+          silenceDurationMs: 1500 // Increased from 1000 to reduce interruptions
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
         turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY
@@ -133,6 +136,7 @@ IMPORTANTE:
 - Adapte-se ao ritmo do lead
 - Confirme informações importantes claramente
 - Use a frase de finalização exata quando completar a qualificação
+- Fale de forma clara e pausada para melhor compreensão
 
 Após coletar as informações, use a tool com a function call send_qualification_webhook para enviar os dados, o url do webhook sempre é https://hooks.zapier.com/hooks/catch/9531377/2j18bjs/`
         }]
