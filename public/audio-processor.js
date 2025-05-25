@@ -2,7 +2,7 @@
 class AudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.bufferSize = 1024;
+    this.bufferSize = 1024; // Smaller buffer for better responsiveness
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
   }
@@ -17,16 +17,19 @@ class AudioProcessor extends AudioWorkletProcessor {
         this.bufferIndex++;
         
         if (this.bufferIndex >= this.bufferSize) {
-          // Convert float32 to 16-bit PCM
+          // Convert float32 to 16-bit PCM as required by Live API
+          // Raw, little-endian, 16-bit PCM format
           const pcmBuffer = new ArrayBuffer(this.bufferSize * 2);
           const pcmView = new DataView(pcmBuffer);
           
           for (let j = 0; j < this.bufferSize; j++) {
+            // Clamp sample to [-1, 1] and convert to 16-bit PCM
             const sample = Math.max(-1, Math.min(1, this.buffer[j]));
-            pcmView.setInt16(j * 2, sample * 0x7FFF, true);
+            const pcmSample = Math.round(sample * 32767);
+            pcmView.setInt16(j * 2, pcmSample, true); // true for little-endian
           }
           
-          // Send PCM data to main thread
+          // Send PCM data to main thread with proper format
           this.port.postMessage({
             type: 'audioData',
             data: pcmBuffer
