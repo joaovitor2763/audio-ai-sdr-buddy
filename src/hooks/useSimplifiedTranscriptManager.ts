@@ -10,6 +10,7 @@ interface TranscriptEntry {
 
 interface ConversationTurn {
   turnId: string;
+  userFragments: string[];
   userTranscript: string;
   aiTranscript: string;
   startTime: Date;
@@ -22,10 +23,10 @@ export const useSimplifiedTranscriptManager = () => {
   
   const currentTurnRef = useRef<ConversationTurn | null>(null);
   const turnCounterRef = useRef(0);
-  const pendingUserTranscriptRef = useRef<string>("");
   const pendingAiTranscriptRef = useRef<string>("");
   const lastUserEntryRef = useRef<string>("");
   const lastAiEntryRef = useRef<string>("");
+  const userFragmentBufferRef = useRef<string[]>([]);
 
   const generateTurnId = useCallback(() => {
     turnCounterRef.current += 1;
@@ -108,15 +109,38 @@ export const useSimplifiedTranscriptManager = () => {
     const turnId = generateTurnId();
     currentTurnRef.current = {
       turnId,
+      userFragments: [],
       userTranscript: "",
       aiTranscript: "",
       startTime: new Date(),
       isComplete: false
     };
     
+    // Reset fragment buffer for new turn
+    userFragmentBufferRef.current = [];
+    
     console.log(`🔄 Started new turn: ${turnId}`);
     return turnId;
   }, [generateTurnId]);
+
+  const accumulateUserFragment = useCallback((fragment: string) => {
+    const cleanedFragment = cleanTranscriptText(fragment);
+    if (!cleanedFragment) return;
+
+    console.log(`📥 Accumulating user fragment: "${cleanedFragment}"`);
+    
+    // Add to fragment buffer
+    userFragmentBufferRef.current.push(cleanedFragment);
+    
+    // Update current turn if exists
+    if (currentTurnRef.current) {
+      currentTurnRef.current.userFragments = [...userFragmentBufferRef.current];
+      // Reconstruct full transcript from fragments
+      currentTurnRef.current.userTranscript = userFragmentBufferRef.current.join(' ').trim();
+    }
+    
+    console.log(`📊 Fragment buffer now has ${userFragmentBufferRef.current.length} fragments: [${userFragmentBufferRef.current.join(', ')}]`);
+  }, [cleanTranscriptText]);
 
   const handleUserTranscript = useCallback((transcriptText: string) => {
     const cleanedText = cleanTranscriptText(transcriptText);
@@ -125,40 +149,24 @@ export const useSimplifiedTranscriptManager = () => {
       return null;
     }
 
-    console.log(`🎤 User transcript received: "${cleanedText}"`);
-
-    // Ignore duplicate updates from the Live API
-    if (cleanedText === pendingUserTranscriptRef.current || cleanedText === lastUserEntryRef.current) {
-      console.log(`⚠️ Duplicate user transcript ignored: "${cleanedText}"`);
-      return null;
-    }
+    console.log(`🎤 User fragment received: "${cleanedText}" (Length: ${cleanedText.length})`);
 
     // If no current turn, start one
     if (!currentTurnRef.current) {
       startNewTurn();
     }
     
-    // For Live API, we get the complete transcript, not incremental
-    pendingUserTranscriptRef.current = cleanedText;
-    
-    if (currentTurnRef.current) {
-      currentTurnRef.current.userTranscript = cleanedText;
-    }
+    // Accumulate this fragment instead of treating it as complete transcript
+    accumulateUserFragment(cleanedText);
     
     return null; // Don't add to transcript yet, wait for turn completion
-  }, [cleanTranscriptText, startNewTurn]);
+  }, [cleanTranscriptText, startNewTurn, accumulateUserFragment]);
 
   const handleAiTranscript = useCallback((text: string) => {
     const cleanedText = cleanTranscriptText(text);
     if (!cleanedText) return;
 
     console.log(`🤖 AI transcript received: "${cleanedText}"`);
-
-    // Ignore duplicate updates from the Live API
-    if (cleanedText === pendingAiTranscriptRef.current || cleanedText === lastAiEntryRef.current) {
-      console.log(`⚠️ Duplicate AI transcript ignored: "${cleanedText}"`);
-      return;
-    }
 
     // For AI responses, we can accumulate as they come in
     if (pendingAiTranscriptRef.current && !pendingAiTranscriptRef.current.includes(cleanedText)) {
@@ -198,15 +206,29 @@ export const useSimplifiedTranscriptManager = () => {
     
     const results: TranscriptEntry[] = [];
     
-    // Add user transcript if exists
-    if (pendingUserTranscriptRef.current.trim()) {
-      const userEntry = addToTranscript(
-        "Usuário", 
-        pendingUserTranscriptRef.current.trim(),
-        currentTurnRef.current.turnId
-      );
-      if (userEntry) results.push(userEntry);
-      pendingUserTranscriptRef.current = "";
+    console.log(`📊 Turn completion - Fragment buffer: [${userFragmentBufferRef.current.join(', ')}]`);
+    console.log(`📊 Current turn user transcript: "${currentTurnRef.current.userTranscript}"`);
+    
+    // FIRST: Add user transcript if exists (ensure proper chronological order)
+    if (userFragmentBufferRef.current.length > 0) {
+      const fullUserTranscript = userFragmentBufferRef.current.join(' ').trim();
+      console.log(`✅ Finalizing complete user transcript: "${fullUserTranscript}"`);
+      
+      if (fullUserTranscript && fullUserTranscript !== lastUserEntryRef.current) {
+        const userEntry = addToTranscript(
+          "Usuário", 
+          fullUserTranscript,
+          currentTurnRef.current.turnId
+        );
+        if (userEntry) {
+          // Adjust timestamp to be slightly before AI response for proper ordering
+          userEntry.timestamp = new Date(Date.now() - 1000);
+          results.push(userEntry);
+        }
+      }
+      
+      // Clear fragment buffer
+      userFragmentBufferRef.current = [];
     }
     
     // Mark turn as complete
@@ -225,19 +247,26 @@ export const useSimplifiedTranscriptManager = () => {
     
     if (!currentTurnRef.current) return null;
     
-    // Process any pending user transcript immediately
-    if (pendingUserTranscriptRef.current.trim()) {
-      const userEntry = addToTranscript(
-        "Usuário", 
-        pendingUserTranscriptRef.current.trim(),
-        currentTurnRef.current.turnId
-      );
-      pendingUserTranscriptRef.current = "";
+    // Process any accumulated user fragments immediately
+    if (userFragmentBufferRef.current.length > 0) {
+      const fullUserTranscript = userFragmentBufferRef.current.join(' ').trim();
+      console.log(`🔄 Finalizing interrupted user transcript: "${fullUserTranscript}"`);
       
-      // Reset turn state
-      currentTurnRef.current = null;
-      
-      return userEntry;
+      if (fullUserTranscript) {
+        const userEntry = addToTranscript(
+          "Usuário", 
+          fullUserTranscript,
+          currentTurnRef.current.turnId
+        );
+        
+        // Clear buffers
+        userFragmentBufferRef.current = [];
+        
+        // Reset turn state
+        currentTurnRef.current = null;
+        
+        return userEntry;
+      }
     }
     
     return null;
@@ -246,10 +275,12 @@ export const useSimplifiedTranscriptManager = () => {
   const clearTranscripts = useCallback(() => {
     console.log(`🧹 Clearing all transcripts`);
     
-    pendingUserTranscriptRef.current = "";
     pendingAiTranscriptRef.current = "";
+    userFragmentBufferRef.current = [];
     currentTurnRef.current = null;
     turnCounterRef.current = 0;
+    lastUserEntryRef.current = "";
+    lastAiEntryRef.current = "";
     setTranscript([]);
   }, []);
 
@@ -257,8 +288,9 @@ export const useSimplifiedTranscriptManager = () => {
   const getCurrentTurnInfo = useCallback(() => {
     return {
       currentTurn: currentTurnRef.current,
-      pendingUser: pendingUserTranscriptRef.current,
-      pendingAi: pendingAiTranscriptRef.current
+      fragmentBuffer: userFragmentBufferRef.current,
+      pendingAi: pendingAiTranscriptRef.current,
+      fragmentCount: userFragmentBufferRef.current.length
     };
   }, []);
 

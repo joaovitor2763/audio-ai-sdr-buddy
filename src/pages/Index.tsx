@@ -91,6 +91,10 @@ const Index = () => {
   const handleModelTurn = async (message: LiveServerMessage) => {
     console.log("📨 Received Gemini message:", message);
 
+    // Enhanced debugging for turn management
+    const turnInfo = getCurrentTurnInfo();
+    console.log("🔍 Current turn info:", turnInfo);
+
     // Handle interruptions first
     const interrupted = message.serverContent?.interrupted;
     if (interrupted) {
@@ -108,12 +112,14 @@ const Index = () => {
       const transcription = message.serverContent.inputTranscription;
       const transcriptText = transcription.text || "";
       
-      console.log("🎤 Live API input transcription:", {
+      console.log("🎤 Live API input transcription fragment:", {
         text: transcriptText,
-        length: transcriptText.length
+        length: transcriptText.length,
+        currentFragmentCount: getCurrentTurnInfo().fragmentCount
       });
       
       if (transcriptText.trim()) {
+        // Pass fragment to be accumulated (not immediately added to transcript)
         handleUserTranscript(transcriptText);
       }
     }
@@ -185,14 +191,21 @@ const Index = () => {
       }
     }
 
-    // Handle turn completion - Process user transcript and qualification
+    // Handle turn completion - Process accumulated user fragments and qualification
     if (message.serverContent?.turnComplete) {
       console.log("🏁 Turn complete detected");
+      
+      // Log current state before processing
+      const preProcessInfo = getCurrentTurnInfo();
+      console.log("📊 Pre-turn-complete state:", preProcessInfo);
+      
       const entries = handleTurnComplete();
+      
+      console.log(`✅ Turn complete processed ${entries.length} entries`);
       
       // Process each entry for qualification data
       for (const entry of entries) {
-        console.log("🔍 Processing turn complete entry for qualification");
+        console.log("🔍 Processing turn complete entry for qualification:", entry);
         await processQualificationData(entry, qualificationData, updateQualificationData, addQualificationLogEntry);
       }
     }
