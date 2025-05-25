@@ -98,18 +98,23 @@ const Index = () => {
       }
     }
 
-    // Handle input transcription with improved timing
+    // Handle input transcription with improved logging
     if (message.serverContent?.inputTranscription) {
       const transcriptText = message.serverContent.inputTranscription.text || "";
       // Safely access isPartial property with fallback
-      const isPartial = (message.serverContent.inputTranscription as any).isPartial || false;
+      const isPartial = (message.serverContent.inputTranscription as any).isPartial !== false;
       
-      console.log("Input transcription received:", transcriptText, "isPartial:", isPartial);
+      console.log("Input transcription received:", {
+        text: transcriptText,
+        isPartial: isPartial,
+        length: transcriptText.length,
+        fullTranscription: message.serverContent.inputTranscription
+      });
       
-      // Process transcription immediately, don't wait for turn complete
+      // Process transcription with proper partial handling
       const userEntry = handleUserTranscript(transcriptText, isPartial);
       if (userEntry) {
-        console.log("Processing finalized user transcript for extraction");
+        console.log("Processing finalized user transcript for extraction:", userEntry);
         extractQualificationData(userEntry, updateQualificationData);
       }
     }

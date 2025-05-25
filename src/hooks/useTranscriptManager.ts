@@ -15,9 +15,10 @@ export const useTranscriptManager = () => {
   const isUserTurnRef = useRef(false);
   const isAiTurnRef = useRef(false);
   const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastPartialTextRef = useRef<string>("");
 
-  // Reduced delay to capture speech faster
-  const TRANSCRIPT_FINALIZATION_DELAY = 800; // Reduced from 2000ms to 800ms
+  // Increased delay to allow for better sentence completion
+  const TRANSCRIPT_FINALIZATION_DELAY = 2000; // Increased back to 2000ms for better sentence capture
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
@@ -31,6 +32,7 @@ export const useTranscriptManager = () => {
       console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
       const entry = addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
       pendingUserTranscriptRef.current = "";
+      lastPartialTextRef.current = "";
       isUserTurnRef.current = false;
       return entry;
     }
@@ -40,27 +42,43 @@ export const useTranscriptManager = () => {
   const handleUserTranscript = useCallback((transcriptText: string, isPartial?: boolean) => {
     console.log("User transcript received:", transcriptText, "isPartial:", isPartial);
     
-    // Always update the pending transcript, even for partial results
-    pendingUserTranscriptRef.current = transcriptText;
-    isUserTurnRef.current = true;
-    
-    // Clear any existing timeout
-    if (userTranscriptTimeoutRef.current) {
-      clearTimeout(userTranscriptTimeoutRef.current);
-    }
-    
-    // If this is a final result (not partial), finalize immediately
-    if (!isPartial) {
-      console.log("Final transcript received, finalizing immediately");
-      return finalizeUserTranscript();
+    // If this is a partial result, only update if it's significantly different or longer
+    if (isPartial) {
+      // Only update if the new text is meaningfully different
+      if (transcriptText.length > lastPartialTextRef.current.length || 
+          !transcriptText.startsWith(lastPartialTextRef.current.substring(0, Math.min(10, lastPartialTextRef.current.length)))) {
+        pendingUserTranscriptRef.current = transcriptText;
+        lastPartialTextRef.current = transcriptText;
+        isUserTurnRef.current = true;
+        
+        console.log("Updated partial transcript:", transcriptText);
+        
+        // Clear any existing timeout
+        if (userTranscriptTimeoutRef.current) {
+          clearTimeout(userTranscriptTimeoutRef.current);
+        }
+        
+        // Set timeout for partial results
+        userTranscriptTimeoutRef.current = setTimeout(() => {
+          console.log("Transcript timeout reached, finalizing user input");
+          finalizeUserTranscript();
+        }, TRANSCRIPT_FINALIZATION_DELAY);
+      }
+      return null;
     } else {
-      // For partial results, set a shorter timeout
-      userTranscriptTimeoutRef.current = setTimeout(() => {
-        console.log("Transcript timeout reached, finalizing user input");
-        finalizeUserTranscript();
-      }, TRANSCRIPT_FINALIZATION_DELAY);
+      // This is a final result - finalize immediately
+      console.log("Final transcript received, finalizing immediately");
+      
+      // Clear any existing timeout
+      if (userTranscriptTimeoutRef.current) {
+        clearTimeout(userTranscriptTimeoutRef.current);
+        userTranscriptTimeoutRef.current = null;
+      }
+      
+      // Update with final text and finalize
+      pendingUserTranscriptRef.current = transcriptText;
+      return finalizeUserTranscript();
     }
-    return null;
   }, [finalizeUserTranscript]);
 
   const handleAiTranscript = useCallback((text: string) => {
@@ -133,6 +151,7 @@ export const useTranscriptManager = () => {
     
     pendingUserTranscriptRef.current = "";
     pendingAiTranscriptRef.current = "";
+    lastPartialTextRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
     setTranscript([]);

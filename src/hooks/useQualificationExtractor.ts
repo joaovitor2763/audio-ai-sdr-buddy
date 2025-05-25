@@ -1,4 +1,3 @@
-
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -27,6 +26,7 @@ export const useQualificationExtractor = (apiKey: string) => {
   const conversationHistoryRef = useRef<ConversationTurn[]>([]);
   const lastExtractedDataRef = useRef<Partial<QualificationData>>({});
   const processingRef = useRef<boolean>(false);
+  const lastExtractionTimeRef = useRef<number>(0);
 
   const extractQualificationData = useCallback(async (
     newTurn: ConversationTurn,
@@ -52,21 +52,27 @@ export const useQualificationExtractor = (apiKey: string) => {
     // Add new turn to conversation history
     conversationHistoryRef.current.push(newTurn);
 
-    // Keep only last 15 turns to have more context but avoid token limits
-    if (conversationHistoryRef.current.length > 15) {
-      conversationHistoryRef.current = conversationHistoryRef.current.slice(-15);
+    // Keep only last 20 turns to have more context
+    if (conversationHistoryRef.current.length > 20) {
+      conversationHistoryRef.current = conversationHistoryRef.current.slice(-20);
     }
 
-    // Only run extraction if we have meaningful user input
+    // Only run extraction if we have meaningful user input and enough time has passed
     const userMessage = newTurn.text.toLowerCase().trim();
-    const greetingWords = ['oi', 'olá', 'hello', 'hi', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem', 'e aí'];
+    const now = Date.now();
+    const timeSinceLastExtraction = now - lastExtractionTimeRef.current;
     
-    if (userMessage.length < 2 || greetingWords.some(greeting => userMessage.includes(greeting) && userMessage.length < 15)) {
-      console.log('Skipping extraction for greeting or very short message:', userMessage);
+    // Skip very short messages, greetings, or if we just ran extraction recently
+    const greetingWords = ['oi', 'olá', 'hello', 'hi', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem', 'e aí'];
+    const isGreeting = greetingWords.some(greeting => userMessage === greeting || (userMessage.includes(greeting) && userMessage.length < 20));
+    
+    if (userMessage.length < 3 || isGreeting || timeSinceLastExtraction < 3000) {
+      console.log('Skipping extraction - too short, greeting, or too recent:', userMessage);
       return;
     }
 
     processingRef.current = true;
+    lastExtractionTimeRef.current = now;
 
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -101,6 +107,7 @@ REGRAS CRÍTICAS:
 7. Seja MUITO conservador - é melhor não extrair nada do que extrair informações incorretas
 8. Se não há informações novas claras, retorne um objeto vazio: {}
 9. Para telefone, extraia apenas números, sem formatação
+10. Considere o contexto da conversa completa, não apenas a última mensagem
 
 EXEMPLO DE CONVERSA E EXTRAÇÃO:
 Usuário: "Oi, meu nome é João Silva"
@@ -128,7 +135,7 @@ Resposta: {"total_funcionarios_empresa": 50}`
         return;
       }
 
-      console.log('Extracting qualification data from all user messages:', userMessages);
+      console.log('Extracting qualification data from user messages:', userMessages);
 
       const contents = [
         {
@@ -169,11 +176,11 @@ Resposta: {"total_funcionarios_empresa": 50}`
         });
 
         if (hasNewData) {
-          console.log('New data detected:', newData);
+          console.log('New qualification data detected:', newData);
           lastExtractedDataRef.current = { ...lastExtractedDataRef.current, ...newData };
           onDataExtracted(newData);
         } else {
-          console.log('No new data detected, skipping update');
+          console.log('No new qualification data detected, skipping update');
         }
 
       } catch (parseError) {
@@ -191,6 +198,7 @@ Resposta: {"total_funcionarios_empresa": 50}`
     conversationHistoryRef.current = [];
     lastExtractedDataRef.current = {};
     processingRef.current = false;
+    lastExtractionTimeRef.current = 0;
   }, []);
 
   return {
