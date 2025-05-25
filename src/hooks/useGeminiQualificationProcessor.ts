@@ -79,9 +79,12 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       fullConversationRef.current = fullConversationRef.current.slice(-50);
     }
 
-    // Only process meaningful entries
-    if (newEntry.text.trim().length < 3) {
-      console.log('Skipping qualification processing for very short text:', newEntry.text);
+    // Only process when Mari finishes talking or on significant user input
+    const shouldProcess = newEntry.speaker === "Mari" || 
+                         (newEntry.speaker === "Usuário" && newEntry.text.trim().length > 5);
+    
+    if (!shouldProcess) {
+      console.log('Skipping qualification processing - waiting for Mari completion or substantial user input');
       return;
     }
 
@@ -98,9 +101,11 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Rate limiting - process at most every 3 seconds for better context accumulation
+    // Rate limiting - process at most every 2 seconds for Mari completions
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 3000) {
+    const minInterval = newEntry.speaker === "Mari" ? 2000 : 3000;
+    
+    if (now - lastProcessTimeRef.current < minInterval) {
       console.log('Rate limiting qualification processing');
       
       // Clear existing timeout and set new one
@@ -112,7 +117,7 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         if (!processingRef.current) {
           processQualificationData(newEntry, currentData, onDataUpdate, onLogEntry);
         }
-      }, 3000 - (now - lastProcessTimeRef.current));
+      }, minInterval - (now - lastProcessTimeRef.current));
       
       return;
     }
@@ -148,48 +153,59 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
 
       console.log('=== QUALIFICATION PROCESSING ===');
       console.log('Total conversation entries:', fullConversationRef.current.length);
+      console.log('Processing triggered by:', newEntry.speaker);
       console.log('Chronological conversation:', chronologicalConversation);
 
       const config = {
         responseMimeType: 'application/json',
-        temperature: 0.1, // Lowered for more consistent extraction
+        temperature: 0.1,
         systemInstruction: [
           {
             text: `Você é um especialista em extração de dados de qualificação de leads de conversas de vendas em português brasileiro.
 
-REGRA FUNDAMENTAL: EXTRAIA INFORMAÇÕES LITERALMENTE DO QUE O USUÁRIO DISSE, sem interpretação ou correção.
+OBJETIVO: Extrair informações de qualificação analisando TODA A CONVERSA (falas da Mari E do usuário).
 
-INSTRUÇÕES ESPECÍFICAS:
-1. LEIA CADA FALA DO USUÁRIO palavra por palavra
-2. EXTRAIA exatamente o que foi dito, preservando o formato original
-3. NÃO corrija erros de transcrição - use o que foi transcrito
-4. Para campos não mencionados explicitamente: "Informação não abordada na call"
+INSTRUÇÕES DE ANÁLISE:
+1. ANALISE tanto as perguntas da Mari quanto as respostas do usuário
+2. Use o CONTEXTO COMPLETO da conversa para inferir informações
+3. Quando o usuário responde uma pergunta da Mari, associe a resposta à pergunta correspondente
+4. Se a transcrição do usuário estiver confusa, use o contexto da pergunta da Mari para inferir o significado
+5. PRIORIZE informações explícitas, mas use inferência contextual quando necessário
 
-CAMPOS OBRIGATÓRIOS (extrair APENAS do que o usuário disse):
+CAMPOS OBRIGATÓRIOS para extrair:
 - nome_completo: Nome que o usuário forneceu
-- nome_empresa: Nome da empresa mencionado pelo usuário
-- como_conheceu_g4: EXATAMENTE como o usuário disse que conheceu (ex: "acompanho os conteúdos no Instagram")
-- faturamento_anual_aproximado: Valor mencionado pelo usuário
+- nome_empresa: Nome da empresa mencionado
+- como_conheceu_g4: Como conheceu a G4 (analisar pergunta da Mari + resposta do usuário)
+- faturamento_anual_aproximado: Valor de faturamento mencionado
 - total_funcionarios_empresa: Número de funcionários (apenas número)
-- setor_empresa: Setor mencionado pelo usuário
-- principal_desafio: Desafio mencionado nas palavras do usuário
-- melhor_dia_contato_especialista: Dia preferido mencionado
-- melhor_horario_contato_especialista: Horário mencionado
-- preferencia_contato_especialista: Canal preferido mencionado
+- setor_empresa: Setor de atuação da empresa
+- principal_desafio: Desafio principal mencionado
+- melhor_dia_contato_especialista: Melhor dia para contato
+- melhor_horario_contato_especialista: Melhor horário para contato
+- preferencia_contato_especialista: Canal preferido de contato
 - telefone: Telefone fornecido
 - analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Detalhes sobre o que foi extraído de cada fala
+- extraction_notes: Explicação detalhada de como cada informação foi extraída
 
-EXEMPLOS DE EXTRAÇÃO CORRETA:
-- Usuário: "acompanho os conteúdos no Instagram" → como_conheceu_g4: "acompanho os conteúdos no Instagram"
-- Usuário: "80 funcionários" → total_funcionarios_empresa: "80"
-- Usuário: "desafio de turno ver meu time" → principal_desafio: "desafio de turno ver meu time"
+EXEMPLOS DE ANÁLISE CONTEXTUAL:
+1. Mari: "Como você conheceu a G4 Educação? Viu a gente no Instagram, foi indicação ou como foi?"
+   Usuário: "Eu acompanho os conteúdos no Instagram."
+   → como_conheceu_g4: "Instagram - acompanha os conteúdos"
 
-IMPORTANTE:
-- NÃO interprete ou "corrija" o que o usuário disse
-- NÃO use informações das falas da Mari, apenas do usuário
-- PRESERVE exatamente as palavras utilizadas pelo usuário
-- Se o usuário repetir informação, use a versão mais clara`
+2. Mari: "E quantos funcionários mais ou menos vocês têm na empresa hoje?"
+   Usuário: "Tô com 80 funcionários."
+   → total_funcionarios_empresa: "80"
+
+3. Mari: "Qual é o principal desafio que a sua empresa tá enfrentando agora?"
+   Usuário: "Eu tô com um desafio de turno ver aqui meu time." (pode estar falando sobre turnover)
+   → principal_desafio: "turnover da equipe" (inferido do contexto)
+
+REGRAS IMPORTANTES:
+- Use informações de AMBOS os falantes (Mari + Usuário)
+- Quando a transcrição estiver confusa, use o contexto da pergunta para inferir
+- Para campos não mencionados: "Informação não abordada na call"
+- SEMPRE explique seu raciocínio em extraction_notes
+- Seja preciso mas use inferência inteligente quando apropriado`
           }
         ],
       };
@@ -200,20 +216,24 @@ IMPORTANTE:
           role: 'user',
           parts: [
             {
-              text: `CONVERSA PARA ANÁLISE (em ordem cronológica):
+              text: `CONVERSA COMPLETA PARA ANÁLISE (em ordem cronológica):
 ${chronologicalConversation}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-TAREFA: Extraia APENAS informações explícitas fornecidas pelo USUÁRIO. Não interprete, não corrija, extraia literalmente o que foi dito.
+TAREFA: 
+1. Analise TODA a conversa (Mari + Usuário)
+2. Extraia informações usando o contexto completo
+3. Associe respostas do usuário às perguntas correspondentes da Mari
+4. Use inferência inteligente quando a transcrição estiver confusa
+5. Explique seu raciocínio em extraction_notes
 
 FOQUE especialmente em:
-1. Nome que o usuário forneceu
-2. Como conheceu a G4 (extrair palavras exatas do usuário)
-3. Desafios mencionados (palavras exatas)
-4. Informações da empresa (nome, funcionários, setor)
-5. Preferências de contato
+- Perguntas da Mari e respostas correspondentes do usuário
+- Contexto das perguntas para interpretar respostas confusas
+- Informações explícitas E implícitas na conversa
+- Associação correta entre pergunta e resposta
 
 Retorne JSON estruturado:`
             },
