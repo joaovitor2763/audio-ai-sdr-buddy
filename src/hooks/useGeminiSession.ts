@@ -68,7 +68,7 @@ export const useGeminiSession = () => {
         slidingWindow: { targetTokens: "20000" },
       },
       tools,
-      // Enable both input and output transcription as per documentation
+      // Enable both input and output transcription with optimal settings
       inputAudioTranscription: {
         enabled: true,
         mode: 'CONTINUOUS'
@@ -80,9 +80,9 @@ export const useGeminiSession = () => {
         automaticActivityDetection: {
           disabled: false,
           startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-          prefixPaddingMs: 200, // Reduced for better responsiveness
-          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH, // Changed from END_SENSITIVITY_MEDIUM to END_SENSITIVITY_HIGH
-          silenceDurationMs: 800 // Reduced silence duration for faster processing
+          prefixPaddingMs: 300,
+          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
+          silenceDurationMs: 1000
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
         turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY

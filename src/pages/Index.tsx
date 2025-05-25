@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -8,7 +9,7 @@ import QualificationCaptureLog from "@/components/QualificationCaptureLog";
 import { LiveServerMessage } from '@google/genai';
 import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
-import { useTranscriptManager } from "@/hooks/useTranscriptManager";
+import { useSimplifiedTranscriptManager } from "@/hooks/useSimplifiedTranscriptManager";
 import { useGeminiSession } from "@/hooks/useGeminiSession";
 import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
@@ -47,16 +48,20 @@ const Index = () => {
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
   const { initializeAudioContext, handleAudioMessage, stopAllAudio, resetAudio } = useAudioPlayback();
+  
+  // Use the new simplified transcript manager
   const { 
     transcript, 
     addToTranscript, 
     handleUserTranscript, 
     handleAiTranscript, 
-    handleInterruption, 
-    handleTurnComplete, 
     handleGenerationComplete, 
-    clearTranscripts 
-  } = useTranscriptManager(apiKey); // Pass API key for transcription cleaning
+    handleTurnComplete, 
+    handleInterruption, 
+    clearTranscripts,
+    getCurrentTurnInfo
+  } = useSimplifiedTranscriptManager();
+  
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
   const { processQualificationData, resetProcessor } = useGeminiQualificationProcessor(apiKey);
 
@@ -92,45 +97,41 @@ const Index = () => {
   };
 
   const handleModelTurn = async (message: LiveServerMessage) => {
-    console.log("Received Gemini message:", message);
+    console.log("📨 Received Gemini message:", message);
 
+    // Handle interruptions first
     const interrupted = message.serverContent?.interrupted;
     if (interrupted) {
-      console.log("Handling interruption, stopping all audio sources");
+      console.log("⚠️ Handling interruption, stopping all audio");
       stopAllAudio();
-      const userEntry = await handleInterruption();
+      const userEntry = handleInterruption();
       if (userEntry) {
-        console.log("Processing interrupted user entry for qualification");
-        processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
+        console.log("🔍 Processing interrupted user entry for qualification");
+        await processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
       }
     }
 
-    // Handle input transcription (what the user said)
+    // Handle input transcription (what the user said) - Live API native transcription
     if (message.serverContent?.inputTranscription) {
       const transcription = message.serverContent.inputTranscription;
       const transcriptText = transcription.text || "";
       
-      console.log("Input transcription received from Live API:", {
+      console.log("🎤 Live API input transcription:", {
         text: transcriptText,
-        length: transcriptText.length,
-        fullTranscription: transcription
+        length: transcriptText.length
       });
       
       if (transcriptText.trim()) {
-        const userEntry = handleUserTranscript(transcriptText, true);
-        if (userEntry) {
-          console.log("Processing finalized user transcript for qualification:", userEntry);
-          processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
-        }
+        handleUserTranscript(transcriptText);
       }
     }
 
-    // Handle output transcription (what Mari said)
+    // Handle output transcription (what Mari said) - Live API native transcription
     if (message.serverContent?.outputTranscription) {
       const transcription = message.serverContent.outputTranscription;
       const transcriptText = transcription.text || "";
       
-      console.log("Output transcription received:", transcriptText);
+      console.log("🤖 Live API output transcription:", transcriptText);
       
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
@@ -140,7 +141,7 @@ const Index = () => {
     // Handle tool calls
     if (message.toolCall) {
       message.toolCall.functionCalls?.forEach(functionCall => {
-        console.log(`Execute function ${functionCall.name} with arguments:`, functionCall.args);
+        console.log(`🔧 Execute function ${functionCall.name}:`, functionCall.args);
         
         if (functionCall.name === 'send_qualification_webhook') {
           const args = functionCall.args as any;
@@ -182,23 +183,25 @@ const Index = () => {
       }
     }
 
-    // Handle turn completion
-    if (message.serverContent?.turnComplete) {
-      console.log("Turn complete detected - finalizing transcriptions");
-      const entries = await handleTurnComplete();
-      entries.forEach(entry => {
-        console.log("Processing entry from turn complete for qualification");
-        processQualificationData(entry, qualificationData, updateQualificationData, addQualificationLogEntry);
-      });
-    }
-
-    // Handle generation completion
+    // Handle generation completion - Process AI transcript and qualification
     if (message.serverContent?.generationComplete) {
-      console.log("Generation complete detected");
+      console.log("🎯 Generation complete detected");
       const aiEntry = handleGenerationComplete();
       if (aiEntry) {
-        console.log("Processing AI entry from generation complete for qualification");
-        processQualificationData(aiEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
+        console.log("🔍 Processing AI entry for qualification");
+        await processQualificationData(aiEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
+      }
+    }
+
+    // Handle turn completion - Process user transcript and qualification
+    if (message.serverContent?.turnComplete) {
+      console.log("🏁 Turn complete detected");
+      const entries = handleTurnComplete();
+      
+      // Process each entry for qualification data
+      for (const entry of entries) {
+        console.log("🔍 Processing turn complete entry for qualification");
+        await processQualificationData(entry, qualificationData, updateQualificationData, addQualificationLogEntry);
       }
     }
   };
