@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -91,6 +92,14 @@ const Index = () => {
     }
   };
 
+  // Process qualification after each complete turn
+  const processQualificationAfterTurn = () => {
+    console.log("Processing qualification after complete turn");
+    setTimeout(() => {
+      processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
+    }, 1000); // 1 second delay to ensure transcript is finalized
+  };
+
   const handleModelTurn = async (message: LiveServerMessage) => {
     console.log("Received Gemini message:", message);
 
@@ -100,11 +109,8 @@ const Index = () => {
       stopAllAudio();
       const userEntry = await handleInterruption();
       if (userEntry) {
-        console.log("Processing qualification after user interruption");
-        // Process qualification after user interruption
-        setTimeout(() => {
-          processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
-        }, 500);
+        console.log("User interruption processed, will process qualification");
+        processQualificationAfterTurn();
       }
     }
 
@@ -122,7 +128,7 @@ const Index = () => {
       if (transcriptText.trim()) {
         const userEntry = handleUserTranscript(transcriptText, true);
         if (userEntry) {
-          console.log("User transcript finalized - will process qualification");
+          console.log("User transcript finalized");
         }
       }
     }
@@ -184,16 +190,13 @@ const Index = () => {
       }
     }
 
-    // Handle turn completion - PROCESS QUALIFICATION EVERY TURN
+    // Handle turn completion - PROCESS QUALIFICATION AFTER EACH COMPLETE TURN
     if (message.serverContent?.turnComplete) {
       console.log("Turn complete detected - finalizing transcriptions and processing qualification");
       const entries = await handleTurnComplete();
       
       // Process qualification after each complete turn
-      setTimeout(() => {
-        console.log("Processing qualification after turn complete");
-        processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
-      }, 1000);
+      processQualificationAfterTurn();
     }
 
     // Handle generation completion
@@ -202,10 +205,7 @@ const Index = () => {
       const aiEntry = handleGenerationComplete();
       
       // Also process qualification after generation complete
-      setTimeout(() => {
-        console.log("Processing qualification after generation complete");
-        processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
-      }, 1000);
+      processQualificationAfterTurn();
     }
   };
 

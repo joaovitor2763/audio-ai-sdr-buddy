@@ -41,33 +41,45 @@ export class TranscriptionCleaner {
 
 TAREFA: Limpe e corrija os segmentos de transcrição fragmentados para criar uma frase coerente e bem formatada.
 
-REGRAS IMPORTANTES:
+REGRAS CRÍTICAS DE LIMPEZA:
 1. SEMPRE responda em português brasileiro
-2. IGNORE completamente qualquer texto em outros idiomas (árabe, chinês, etc.) - são erros de transcrição
-3. Se encontrar texto em outros idiomas, DESCONSIDERE e trabalhe apenas com o português
+2. IGNORE COMPLETAMENTE texto em árabe, chinês, japonês, coreano ou qualquer idioma não-latino
+3. Se encontrar caracteres não-latinos, DESCONSIDERE completamente esses segmentos
 4. Remova todos os marcadores <noise>
-5. Corrija problemas de espaçamento (ex: "M e u  n o m e" → "Meu nome")
-6. Corrija fragmentação óbvia (ex: "Me uno me é" + "Jo ão" + "Vítor" → "Meu nome é João Vítor")
-7. Mantenha o fluxo natural do português
+5. Corrija problemas de espaçamento excessivo (ex: "M e u  n o m e" → "Meu nome")
+6. Corrija fragmentação óbvia de palavras (ex: "Me uno me é" + "Jo ão" → "Meu nome é João")
+7. Mantenha o fluxo natural do português brasileiro
 8. Retorne apenas o texto limpo, sem explicações
-9. Se os segmentos não formam texto coerente, retorne a melhor interpretação possível
-10. Preserve nomes próprios e informações importantes
-11. Remova palavras ou frases duplicadas devido à fragmentação
+9. Se os segmentos não formam texto coerente em português, retorne a melhor interpretação possível
+10. Preserve nomes próprios e informações importantes (empresas, pessoas, etc.)
+11. Remova palavras duplicadas causadas por fragmentação
+12. Se não há conteúdo válido em português, retorne string vazia
 
-EXEMPLOS:
+PRIORIDADE DE LIMPEZA:
+- Primeiro: remover completamente texto em idiomas não-latinos
+- Segundo: corrigir espaçamento e fragmentação
+- Terceiro: formar frases coerentes em português
+
+EXEMPLOS DE LIMPEZA:
 Input: "M e u  n o m e  é  J o ã o"
 Output: "Meu nome é João"
 
 Input: "G 4 E d u c a ç ã o"
 Output: "G4 Educação"
 
-Input: "A minha empresa é Empreende Brasil"
-Output: "A minha empresa é Empreende Brasil"
+Input: "Trabalho na Mi cro soft"
+Output: "Trabalho na Microsoft"
 
-Input: "به نام ژن ویتور" (texto em árabe)
-Output: "" (ignorar texto em outros idiomas)
+Input: "به نام ژن ویتور" (árabe - IGNORAR)
+Output: ""
 
-Retorne apenas a transcrição limpa em português:`
+Input: "Meu nome é João به نام Microsoft"
+Output: "Meu nome é João Microsoft"
+
+Input: "Conheci pelo Insta gram"
+Output: "Conheci pelo Instagram"
+
+Retorne apenas a transcrição limpa em português brasileiro ou string vazia se não há conteúdo válido:`
           }
         ],
       };
@@ -77,10 +89,10 @@ Retorne apenas a transcrição limpa em português:`
           role: 'user',
           parts: [
             {
-              text: `TEXTO ACUMULADO ATUAL: "${currentAccumulated}"
+              text: `TEXTO ACUMULADO: "${currentAccumulated}"
 SEGMENTOS BRUTOS: ${segmentTexts}
 
-Limpe esta transcrição mantendo apenas o português:`
+Limpe esta transcrição mantendo apenas português brasileiro válido:`
             }
           ]
         }
@@ -95,15 +107,15 @@ Limpe esta transcrição mantendo apenas o português:`
         contents
       });
 
-      const cleanedText = response.text?.trim() || currentAccumulated;
+      const cleanedText = response.text?.trim() || '';
       
       console.log("=== TRANSCRIPTION CLEANER OUTPUT ===");
       console.log("Gemini raw response:", response.text);
-      console.log("Final cleaned text:", cleanedText);
+      console.log("Cleaned text before post-processing:", cleanedText);
       
-      // Additional safety cleanup to ensure Portuguese only
-      const finalResult = this.postProcessText(cleanedText);
-      console.log("After post-processing:", finalResult);
+      // Post-processing for additional safety
+      const finalResult = this.postProcessText(cleanedText, currentAccumulated);
+      console.log("Final result after post-processing:", finalResult);
       
       return finalResult;
       
@@ -116,29 +128,37 @@ Limpe esta transcrição mantendo apenas o português:`
     }
   }
 
-  private postProcessText(text: string): string {
+  private postProcessText(text: string, fallback: string): string {
     // Remove noise markers
     let cleaned = text.replace(/<noise>/g, '').trim();
     
-    // Fix excessive spacing
-    cleaned = cleaned.replace(/\s+/g, ' ');
-    
     // Remove any remaining non-Latin characters (Arabic, Chinese, etc.)
-    cleaned = cleaned.replace(/[\u0600-\u06FF\u4E00-\u9FFF\u0590-\u05FF]/g, '').trim();
+    cleaned = cleaned.replace(/[\u0600-\u06FF\u4E00-\u9FFF\u0590-\u05FF\u3040-\u309F\u30A0-\u30FF]/g, '').trim();
+    
+    // Fix excessive spacing
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    
+    // If result is empty or too short, try basic cleanup of fallback
+    if (!cleaned || cleaned.length < 2) {
+      cleaned = this.basicCleanup(fallback);
+    }
     
     // Remove duplicate words that might have slipped through
-    const words = cleaned.split(' ');
-    const deduped = words.filter((word, index) => 
-      index === 0 || word.toLowerCase() !== words[index - 1]?.toLowerCase()
-    );
+    if (cleaned) {
+      const words = cleaned.split(' ');
+      const deduped = words.filter((word, index) => 
+        index === 0 || word.toLowerCase() !== words[index - 1]?.toLowerCase()
+      );
+      cleaned = deduped.join(' ').trim();
+    }
     
-    return deduped.join(' ').trim();
+    return cleaned;
   }
 
   private basicCleanup(text: string): string {
     return text
       .replace(/<noise>/g, '')
-      .replace(/[\u0600-\u06FF\u4E00-\u9FFF\u0590-\u05FF]/g, '') // Remove non-Latin scripts
+      .replace(/[\u0600-\u06FF\u4E00-\u9FFF\u0590-\u05FF\u3040-\u309F\u30A0-\u30FF]/g, '') // Remove non-Latin scripts
       .replace(/\s+/g, ' ')
       .trim();
   }
