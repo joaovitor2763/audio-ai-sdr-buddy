@@ -65,15 +65,6 @@ const Index = () => {
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
   const { processQualificationData, resetProcessor } = useGeminiQualificationProcessor(apiKey);
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isCallActive && !isMuted) {
-      interval = setInterval(() => {
-        setAudioLevel(Math.random() * 100);
-      }, 100);
-    }
-    return () => clearInterval(interval);
-  }, [isCallActive, isMuted]);
 
   const updateQualificationData = (data: Partial<typeof qualificationData>) => {
     console.log("Updating qualification data:", data);

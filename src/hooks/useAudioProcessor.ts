@@ -74,6 +74,8 @@ export const useAudioProcessor = () => {
   
   const stopAudioProcessing = useCallback(() => {
     if (audioWorkletRef.current) {
+      // Flush any remaining samples before disconnecting
+      audioWorkletRef.current.port.postMessage('flush');
       audioWorkletRef.current.disconnect();
       audioWorkletRef.current = null;
     }
