@@ -1,4 +1,3 @@
-
 import { useRef, useCallback } from 'react';
 import { GoogleGenAI, Session, Type, Modality, MediaResolution, LiveServerMessage, StartSensitivity, EndSensitivity, ActivityHandling, TurnCoverage } from '@google/genai';
 
@@ -82,9 +81,9 @@ export const useGeminiSession = () => {
       realtimeInputConfig: {
         automaticActivityDetection: {
           disabled: false,
-          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_MEDIUM, // Changed from HIGH to MEDIUM
+          startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH, // Using HIGH instead of MEDIUM
           prefixPaddingMs: 500, // Increased from 300 to better capture start of speech
-          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_MEDIUM, // Changed from HIGH to MEDIUM
+          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH, // Using HIGH instead of MEDIUM
           silenceDurationMs: 1500 // Increased from 1000 to reduce interruptions
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
