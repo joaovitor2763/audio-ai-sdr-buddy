@@ -47,24 +47,29 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Prevent concurrent processing
-    if (processingRef.current) {
-      console.log('Qualification processing already in progress, queueing entry');
-      conversationBufferRef.current.push(newEntry);
-      return;
-    }
-
     // Add to conversation buffer
     conversationBufferRef.current.push(newEntry);
     
-    // Keep only last 10 entries for context
-    if (conversationBufferRef.current.length > 10) {
-      conversationBufferRef.current = conversationBufferRef.current.slice(-10);
+    // Keep only last 15 entries for better context
+    if (conversationBufferRef.current.length > 15) {
+      conversationBufferRef.current = conversationBufferRef.current.slice(-15);
     }
 
-    // Rate limiting - process at most every 2 seconds
+    // Only process meaningful entries (longer than 10 characters)
+    if (newEntry.text.trim().length < 10) {
+      console.log('Skipping qualification processing for short text:', newEntry.text);
+      return;
+    }
+
+    // Prevent concurrent processing
+    if (processingRef.current) {
+      console.log('Qualification processing already in progress, skipping');
+      return;
+    }
+
+    // Rate limiting - process at most every 3 seconds
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 2000) {
+    if (now - lastProcessTimeRef.current < 3000) {
       console.log('Rate limiting qualification processing');
       return;
     }
@@ -77,46 +82,54 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         apiKey: apiKey,
       });
 
+      const conversationText = conversationBufferRef.current
+        .map(entry => `${entry.speaker}: ${entry.text}`)
+        .join('\n');
+
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em análise de dados de qualificação de leads para a G4 Educação. 
+            text: `Você é um especialista em análise de dados de qualificação de leads para a G4 Educação.
 
-TAREFA: Analise a conversa recente e extraia/atualize informações de qualificação baseado no contexto completo.
+IMPORTANTE: Analise TODA a conversa para extrair informações de qualificação. Procure por informações EXPLICITAMENTE mencionadas.
 
-CAMPOS DE QUALIFICAÇÃO:
-- nome_completo: Nome completo da pessoa
-- nome_empresa: Nome da empresa/organização  
-- como_conheceu_g4: Como conheceu o G4 (Google, LinkedIn, indicação, etc.)
-- faturamento_anual_aproximado: Faturamento anual (ex: "R$ 5.000.000")
-- total_funcionarios_empresa: Número de funcionários (número inteiro)
-- setor_empresa: Setor de atuação (ex: "tecnologia", "educação")
-- principal_desafio: Principal desafio da empresa
-- melhor_dia_contato_especialista: Melhor dia para contato
-- melhor_horario_contato_especialista: Melhor horário para contato
+CAMPOS PARA EXTRAIR:
+- nome_completo: Nome completo da pessoa (ex: "João Silva", "Maria Santos")
+- nome_empresa: Nome da empresa/organização (ex: "G4 Educação", "Microsoft", "Banco do Brasil")
+- como_conheceu_g4: Como conheceu o G4 (ex: "Google", "LinkedIn", "indicação", "Instagram")
+- faturamento_anual_aproximado: Faturamento anual em texto (ex: "R$ 5.000.000", "3 milhões", "300 mil reais")
+- total_funcionarios_empresa: Número de funcionários (ex: 50, 100, 250)
+- setor_empresa: Setor de atuação (ex: "educação", "tecnologia", "saúde", "financeiro")
+- principal_desafio: Principal desafio da empresa (ex: "captação de alunos", "gestão de processos")
+- melhor_dia_contato_especialista: Melhor dia para contato (ex: "segunda", "terça-feira")
+- melhor_horario_contato_especialista: Melhor horário (ex: "manhã", "14h às 16h", "tarde")
 - preferencia_contato_especialista: "Ligacao" ou "WhatsApp"
 - telefone: Número de telefone (apenas números)
-- qualificador_nome: Nome do qualificador (sempre "Mari")
 
 DADOS ATUAIS:
 ${JSON.stringify(currentData, null, 2)}
 
-CONVERSA RECENTE:
-${conversationBufferRef.current.map(entry => `${entry.speaker}: ${entry.text}`).join('\n')}
+CONVERSA COMPLETA:
+${conversationText}
 
 INSTRUÇÕES:
-1. Analise TODA a conversa (usuário E Mari) para entender o contexto
-2. Extraia apenas informações EXPLICITAMENTE mencionadas
-3. Retorne APENAS campos que foram identificados ou atualizados
-4. Se nenhuma informação nova foi encontrada, retorne objeto vazio: {}
-5. Para cada campo extraído, inclua um campo adicional "_confidence" (high/medium/low)
+1. Analise TODO o contexto da conversa
+2. Extraia APENAS informações que foram CLARAMENTE mencionadas
+3. Para números de funcionários, extraia apenas o número (ex: 250, não "250 funcionários")
+4. Para faturamento, mantenha o formato original mencionado
+5. Se uma informação for mencionada mas já existe nos dados atuais, não a inclua novamente
+6. Retorne APENAS campos novos ou atualizados
+7. Se nenhuma informação nova, retorne: {}
 
-FORMATO DE RESPOSTA (JSON):
-{
-  "campo_identificado": "valor",
-  "campo_identificado_confidence": "high|medium|low"
-}`
+EXEMPLOS:
+Conversa: "Meu nome é João Silva, trabalho na Microsoft que tem 300 funcionários"
+Resposta: {"nome_completo": "João Silva", "nome_empresa": "Microsoft", "total_funcionarios_empresa": 300}
+
+Conversa: "Nossa empresa fatura cerca de 5 milhões por ano, somos do setor de tecnologia"
+Resposta: {"faturamento_anual_aproximado": "5 milhões", "setor_empresa": "tecnologia"}
+
+RESPOSTA (JSON apenas):`
           }
         ],
       };
@@ -127,11 +140,13 @@ FORMATO DE RESPOSTA (JSON):
           role: 'user',
           parts: [
             {
-              text: `Analise a conversa e extraia dados de qualificação: ${conversationBufferRef.current.map(entry => `${entry.speaker}: ${entry.text}`).join('\n')}`
+              text: `Analise esta conversa e extraia dados de qualificação:\n${conversationText}`
             },
           ],
         },
       ];
+
+      console.log('Sending conversation to Gemini 2.0 Flash Lite for qualification:', conversationText);
 
       const response = await ai.models.generateContentStream({
         model,
@@ -149,11 +164,13 @@ FORMATO DE RESPOSTA (JSON):
       console.log('Gemini 2.0 Flash Lite qualification response:', responseText);
 
       try {
-        const extractedData = JSON.parse(responseText);
+        // Clean the response (remove markdown formatting if present)
+        const cleanedResponse = responseText.replace(/```json\n?|\n?```/g, '').trim();
+        const extractedData = JSON.parse(cleanedResponse);
         
         // Process extracted data and create log entries
         const updates: Partial<QualificationData> = {};
-        const hasUpdates = Object.keys(extractedData).some(key => !key.endsWith('_confidence'));
+        const hasUpdates = Object.keys(extractedData).length > 0;
         
         if (!hasUpdates) {
           console.log('No qualification updates from Gemini 2.0 Flash Lite');
@@ -161,11 +178,10 @@ FORMATO DE RESPOSTA (JSON):
         }
 
         Object.entries(extractedData).forEach(([key, value]) => {
-          if (!key.endsWith('_confidence') && value && value !== '') {
-            const confidenceKey = `${key}_confidence`;
-            const confidence = extractedData[confidenceKey] || 'medium';
+          if (value && value !== '' && value !== 0) {
             const oldValue = currentData[key as keyof QualificationData];
             
+            // Only update if the value is different
             if (value !== oldValue) {
               (updates as any)[key] = value;
               
@@ -176,7 +192,7 @@ FORMATO DE RESPOSTA (JSON):
                 oldValue,
                 newValue: value,
                 source: newEntry.speaker === 'Usuário' ? 'user' : 'ai',
-                confidence: confidence as 'high' | 'medium' | 'low'
+                confidence: 'high'
               });
             }
           }
@@ -189,13 +205,14 @@ FORMATO DE RESPOSTA (JSON):
 
       } catch (parseError) {
         console.error('Error parsing Gemini 2.0 Flash Lite response:', parseError);
+        console.error('Raw response was:', responseText);
         
         // Fallback: create log entry for processing attempt
         onLogEntry({
           timestamp: new Date(),
           field: 'system',
           oldValue: null,
-          newValue: 'Processing error',
+          newValue: 'Processing error: Invalid JSON response',
           source: 'system',
           confidence: 'low'
         });
@@ -214,16 +231,6 @@ FORMATO DE RESPOSTA (JSON):
       });
     } finally {
       processingRef.current = false;
-      
-      // Process any queued entries
-      if (conversationBufferRef.current.length > 1) {
-        setTimeout(() => {
-          const nextEntry = conversationBufferRef.current[conversationBufferRef.current.length - 1];
-          if (nextEntry && nextEntry !== newEntry) {
-            processQualificationData(nextEntry, currentData, onDataUpdate, onLogEntry);
-          }
-        }, 1000);
-      }
     }
   }, [apiKey]);
 

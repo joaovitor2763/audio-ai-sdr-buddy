@@ -1,4 +1,3 @@
-
 import { useRef, useCallback, useState } from 'react';
 
 interface TranscriptEntry {
@@ -17,10 +16,12 @@ export const useTranscriptManager = () => {
   const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastUserTextRef = useRef<string>("");
   const accumulatedUserTextRef = useRef<string>("");
+  const lastFragmentTimeRef = useRef<number>(0);
 
-  // Longer delay to wait for complete sentences
-  const TRANSCRIPT_FINALIZATION_DELAY = 3000;
-  const MIN_TEXT_LENGTH_FOR_FINALIZATION = 3;
+  // Increased delay for better sentence accumulation
+  const TRANSCRIPT_FINALIZATION_DELAY = 4000;
+  const MIN_TEXT_LENGTH_FOR_FINALIZATION = 5;
+  const FRAGMENT_MERGE_THRESHOLD = 500; // ms between fragments to consider merging
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
@@ -28,6 +29,27 @@ export const useTranscriptManager = () => {
     console.log(`Added to transcript: ${speaker}: ${text}`);
     return newEntry;
   }, []);
+
+  const cleanAndMergeText = (newText: string, existingText: string): string => {
+    // Remove extra spaces and normalize
+    const cleanNew = newText.trim();
+    const cleanExisting = existingText.trim();
+    
+    if (!cleanExisting) return cleanNew;
+    if (!cleanNew) return cleanExisting;
+    
+    // Check if new text should be concatenated directly or with space
+    const lastChar = cleanExisting.slice(-1);
+    const firstChar = cleanNew.charAt(0);
+    
+    // If the existing text ends with a space or the new text starts with a space, don't add extra space
+    if (lastChar === ' ' || firstChar === ' ') {
+      return cleanExisting + cleanNew;
+    }
+    
+    // Add space between words
+    return cleanExisting + ' ' + cleanNew;
+  };
 
   const finalizeUserTranscript = useCallback(() => {
     const textToFinalize = accumulatedUserTextRef.current.trim();
@@ -39,17 +61,21 @@ export const useTranscriptManager = () => {
       accumulatedUserTextRef.current = "";
       pendingUserTranscriptRef.current = "";
       isUserTurnRef.current = false;
+      lastFragmentTimeRef.current = 0;
       return entry;
     }
     return null;
   }, [addToTranscript]);
 
   const handleUserTranscript = useCallback((transcriptText: string, isPartial?: boolean) => {
+    const now = Date.now();
+    
     console.log("User transcript fragment received:", {
       text: transcriptText,
       isPartial: isPartial,
       length: transcriptText.length,
-      currentAccumulated: accumulatedUserTextRef.current
+      currentAccumulated: accumulatedUserTextRef.current,
+      timeSinceLastFragment: now - lastFragmentTimeRef.current
     });
     
     // Skip empty or very short meaningless fragments
@@ -57,18 +83,21 @@ export const useTranscriptManager = () => {
       return null;
     }
 
-    // For Live API, we get individual word/phrase fragments
-    // We need to accumulate them into complete sentences
     const trimmedText = transcriptText.trim();
     
-    // Add this fragment to our accumulated text
-    if (accumulatedUserTextRef.current) {
-      // Check if this fragment should be concatenated with a space or not
-      const needsSpace = !accumulatedUserTextRef.current.endsWith(' ') && !trimmedText.startsWith(' ');
-      accumulatedUserTextRef.current += (needsSpace ? ' ' : '') + trimmedText;
-    } else {
-      accumulatedUserTextRef.current = trimmedText;
+    // If too much time has passed since last fragment, treat this as a new sentence
+    if (lastFragmentTimeRef.current > 0 && (now - lastFragmentTimeRef.current) > FRAGMENT_MERGE_THRESHOLD * 3) {
+      console.log("Gap detected, finalizing previous text and starting new");
+      if (accumulatedUserTextRef.current.trim().length >= MIN_TEXT_LENGTH_FOR_FINALIZATION) {
+        finalizeUserTranscript();
+      } else {
+        accumulatedUserTextRef.current = "";
+      }
     }
+    
+    // Accumulate the text
+    accumulatedUserTextRef.current = cleanAndMergeText(trimmedText, accumulatedUserTextRef.current);
+    lastFragmentTimeRef.current = now;
     
     console.log("Accumulated user text now:", accumulatedUserTextRef.current);
     
@@ -80,7 +109,6 @@ export const useTranscriptManager = () => {
     }
     
     // Set timeout to finalize transcript after user stops speaking
-    // Only if we have meaningful accumulated content
     if (accumulatedUserTextRef.current.trim().length >= MIN_TEXT_LENGTH_FOR_FINALIZATION) {
       userTranscriptTimeoutRef.current = setTimeout(() => {
         console.log("Transcript timeout reached, finalizing accumulated user input");
@@ -165,6 +193,7 @@ export const useTranscriptManager = () => {
     accumulatedUserTextRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
+    lastFragmentTimeRef.current = 0;
     setTranscript([]);
   }, []);
 
