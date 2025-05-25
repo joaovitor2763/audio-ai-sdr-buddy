@@ -1,5 +1,4 @@
 
-
 import { GoogleGenAI } from '@google/genai';
 
 interface TranscriptionSegment {
@@ -27,6 +26,13 @@ export class TranscriptionCleaner {
 
     try {
       const segmentTexts = segments.map(s => s.text).join(' | ');
+      
+      console.log("=== TRANSCRIPTION CLEANER INPUT ===");
+      console.log("Raw segments:", segments);
+      console.log("Segment texts joined:", segmentTexts);
+      console.log("Current accumulated:", currentAccumulated);
+      console.log("Speaker:", speaker);
+      
       const prompt = `You are a transcription cleanup specialist for Portuguese conversations. 
 
 TASK: Clean and correct the fragmented transcription segments to create a coherent, properly formatted sentence.
@@ -68,6 +74,9 @@ Return only the cleaned transcription:`;
         maxOutputTokens: 200
       };
 
+      console.log("=== SENDING TO GEMINI ===");
+      console.log("Prompt:", prompt);
+
       const response = await this.ai.models.generateContent({
         model: this.model,
         config,
@@ -76,13 +85,22 @@ Return only the cleaned transcription:`;
 
       const cleanedText = response.text?.trim() || currentAccumulated;
       
+      console.log("=== TRANSCRIPTION CLEANER OUTPUT ===");
+      console.log("Gemini raw response:", response.text);
+      console.log("Final cleaned text:", cleanedText);
+      
       // Additional safety cleanup
-      return this.postProcessText(cleanedText);
+      const finalResult = this.postProcessText(cleanedText);
+      console.log("After post-processing:", finalResult);
+      
+      return finalResult;
       
     } catch (error) {
       console.error('Error cleaning transcription with Gemini 2.0 Flash Lite:', error);
       // Fallback to basic cleaning
-      return this.basicCleanup(currentAccumulated);
+      const fallback = this.basicCleanup(currentAccumulated);
+      console.log("Using fallback cleanup:", fallback);
+      return fallback;
     }
   }
 
@@ -109,4 +127,3 @@ Return only the cleaned transcription:`;
       .trim();
   }
 }
-

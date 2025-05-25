@@ -28,13 +28,14 @@ export const useTranscriptManager = (apiKey?: string) => {
   const initializeCleaner = useCallback(() => {
     if (apiKey && !cleanerRef.current) {
       cleanerRef.current = new TranscriptionCleaner(apiKey);
+      console.log("✅ TranscriptionCleaner initialized with API key");
     }
   }, [apiKey]);
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
     setTranscript(prev => [...prev, newEntry]);
-    console.log(`Added to transcript: ${speaker}: ${text}`);
+    console.log(`📝 Added to transcript: ${speaker}: ${text}`);
     return newEntry;
   }, []);
 
@@ -44,14 +45,15 @@ export const useTranscriptManager = (apiKey?: string) => {
     const segments = pendingUserSegmentsRef.current;
     const rawAccumulated = segments.map(s => s.text).join(' ');
     
-    console.log("Finalizing user transcript with segments:", {
+    console.log("🔄 Finalizing user transcript with segments:", {
       segmentCount: segments.length,
+      segments: segments,
       rawAccumulated,
       lastUserText: lastUserTextRef.current
     });
     
     if (!rawAccumulated.trim() || rawAccumulated.trim() === '<noise>') {
-      console.log("No meaningful content to finalize");
+      console.log("❌ No meaningful content to finalize");
       return null;
     }
 
@@ -60,23 +62,25 @@ export const useTranscriptManager = (apiKey?: string) => {
     // Use Gemini 2.0 Flash Lite for cleaning if available
     if (cleanerRef.current) {
       try {
+        console.log("🤖 Using Gemini cleaner for transcription");
         cleanedText = await cleanerRef.current.cleanTranscription(
           segments,
           rawAccumulated,
           'user'
         );
-        console.log("Gemini 2.0 Flash Lite cleaned text:", cleanedText);
+        console.log("✅ Gemini cleaned text:", cleanedText);
       } catch (error) {
-        console.error("Error using Gemini cleaner, falling back to basic cleanup:", error);
+        console.error("❌ Error using Gemini cleaner, falling back to basic cleanup:", error);
         cleanedText = rawAccumulated.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
       }
     } else {
+      console.log("⚠️ No cleaner available, using basic cleanup");
       // Basic cleanup fallback
       cleanedText = rawAccumulated.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
     }
     
     if (cleanedText && cleanedText !== lastUserTextRef.current && cleanedText.length >= 2) {
-      console.log("Adding finalized user transcript:", cleanedText);
+      console.log("✅ Adding finalized user transcript:", cleanedText);
       const entry = addToTranscript("Usuário", cleanedText);
       lastUserTextRef.current = cleanedText;
       pendingUserSegmentsRef.current = [];
@@ -84,12 +88,13 @@ export const useTranscriptManager = (apiKey?: string) => {
       return entry;
     }
     
+    console.log("❌ Cleaned text not added (duplicate or too short):", { cleanedText, lastUserText: lastUserTextRef.current });
     return null;
   }, [addToTranscript, initializeCleaner]);
 
   // Accumulate user input segments during their turn
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
-    console.log("Live API user transcript received:", {
+    console.log("🎤 Live API user transcript received:", {
       text: transcriptText,
       isFinal: isFinal,
       length: transcriptText.length,
@@ -103,7 +108,7 @@ export const useTranscriptManager = (apiKey?: string) => {
 
     // Start user turn if not already active
     if (!isUserTurnRef.current) {
-      console.log("Starting user turn");
+      console.log("🟢 Starting user turn");
       isUserTurnRef.current = true;
       pendingUserSegmentsRef.current = [];
     }
@@ -115,17 +120,17 @@ export const useTranscriptManager = (apiKey?: string) => {
       isFinal: !!isFinal
     });
     
-    console.log("Added segment to collection, total segments:", pendingUserSegmentsRef.current.length);
+    console.log("📥 Added segment to collection, total segments:", pendingUserSegmentsRef.current.length);
     
     return null;
   }, []);
 
   const handleAiTranscript = useCallback((text: string) => {
-    console.log("AI text received:", text);
+    console.log("🤖 AI text received:", text);
     
     // If we have pending user segments and AI is starting to speak, finalize user turn
     if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("AI speaking detected - finalizing pending user transcript");
+      console.log("🔄 AI speaking detected - finalizing pending user transcript");
       finalizeUserTranscript();
     }
     
@@ -134,11 +139,11 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, [finalizeUserTranscript]);
 
   const handleInterruption = useCallback(async () => {
-    console.log("Handling transcript interruption");
+    console.log("⚠️ Handling transcript interruption");
     
     // Finalize any pending user transcript on interruption
     if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("Finalizing interrupted user transcript");
+      console.log("🔄 Finalizing interrupted user transcript");
       return await finalizeUserTranscript();
     }
     
@@ -146,13 +151,13 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, [finalizeUserTranscript]);
 
   const handleTurnComplete = useCallback(async () => {
-    console.log("Turn completed - pending segments:", pendingUserSegmentsRef.current.length, "pending AI:", pendingAiTranscriptRef.current);
+    console.log("🏁 Turn completed - pending segments:", pendingUserSegmentsRef.current.length, "pending AI:", pendingAiTranscriptRef.current);
     
     const results = [];
     
     // First finalize AI transcript if exists
     if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("Finalizing AI transcript on turn complete:", pendingAiTranscriptRef.current);
+      console.log("✅ Finalizing AI transcript on turn complete:", pendingAiTranscriptRef.current);
       results.push(addToTranscript("Mari", pendingAiTranscriptRef.current.trim()));
       pendingAiTranscriptRef.current = "";
       isAiTurnRef.current = false;
@@ -160,7 +165,7 @@ export const useTranscriptManager = (apiKey?: string) => {
     
     // Then finalize user transcript if exists
     if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("Finalizing user transcript on turn complete");
+      console.log("🔄 Finalizing user transcript on turn complete");
       const entry = await finalizeUserTranscript();
       if (entry) results.push(entry);
     }
@@ -169,10 +174,10 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, [addToTranscript, finalizeUserTranscript]);
 
   const handleGenerationComplete = useCallback(() => {
-    console.log("Generation completed");
+    console.log("🎯 Generation completed");
     
     if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("Finalizing AI transcript on generation complete:", pendingAiTranscriptRef.current);
+      console.log("✅ Finalizing AI transcript on generation complete:", pendingAiTranscriptRef.current);
       const entry = addToTranscript("Mari", pendingAiTranscriptRef.current.trim());
       pendingAiTranscriptRef.current = "";
       isAiTurnRef.current = false;
