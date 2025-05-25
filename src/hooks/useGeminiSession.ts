@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, LiveSession } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 
 interface SessionConfig {
   apiKey: string;
@@ -10,15 +10,15 @@ interface SessionConfig {
 }
 
 export const useGeminiSession = () => {
-  let currentSession: LiveSession | null = null;
+  let currentSession: any | null = null;
 
-  const createSession = async (config: SessionConfig): Promise<LiveSession> => {
+  const createSession = async (config: SessionConfig) => {
     const ai = new GoogleGenAI({ apiKey: config.apiKey });
     
     const session = await ai.live.connect({
       model: 'gemini-2.0-flash-live-001',
       config: {
-        responseModalities: ['AUDIO'],
+        responseModalities: ['audio'],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: {
