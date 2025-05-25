@@ -1,4 +1,3 @@
-
 import { useRef, useCallback, useState } from 'react';
 
 interface TranscriptEntry {
@@ -27,13 +26,14 @@ export const useSimplifiedTranscriptManager = () => {
   const lastUserEntryRef = useRef<string>("");
   const lastAiEntryRef = useRef<string>("");
   const userFragmentBufferRef = useRef<string[]>([]);
+  const turnStartTimeRef = useRef<Date | null>(null);
 
   const generateTurnId = useCallback(() => {
     turnCounterRef.current += 1;
     return `turn-${turnCounterRef.current}-${Date.now()}`;
   }, []);
 
-  // Improved text cleaning function
+  // Improved text cleaning function with less aggressive filtering
   const cleanTranscriptText = useCallback((text: string) => {
     if (!text) return "";
     
@@ -44,15 +44,15 @@ export const useSimplifiedTranscriptManager = () => {
       .replace(/\s+/g, " ")
       .trim();
     
-    // Filter out very short or meaningless content
-    if (cleaned.length < 2 || cleaned === "." || cleaned === "," || cleaned === "?") {
+    // Only filter out very short meaningless content, but keep short valid words
+    if (cleaned.length < 1 || cleaned === "." || cleaned === ",") {
       return "";
     }
     
     return cleaned;
   }, []);
 
-  const addToTranscript = useCallback((speaker: string, text: string, turnId: string) => {
+  const addToTranscript = useCallback((speaker: string, text: string, turnId: string, customTimestamp?: Date) => {
     const cleanedText = cleanTranscriptText(text);
     if (!cleanedText) return null;
 
@@ -69,11 +69,11 @@ export const useSimplifiedTranscriptManager = () => {
     const newEntry: TranscriptEntry = { 
       speaker, 
       text: cleanedText, 
-      timestamp: new Date(),
+      timestamp: customTimestamp || new Date(),
       turnId
     };
     
-    console.log(`📝 Adding to transcript: ${speaker}: ${cleanedText} (Turn: ${turnId})`);
+    console.log(`📝 Adding to transcript: ${speaker}: ${cleanedText} (Turn: ${turnId}) at ${newEntry.timestamp.toISOString()}`);
     
     setTranscript(prev => {
       // More sophisticated duplicate detection
@@ -93,7 +93,10 @@ export const useSimplifiedTranscriptManager = () => {
         return prev;
       }
 
-      return [...prev, newEntry];
+      // Insert in chronological order
+      const newTranscript = [...prev, newEntry];
+      newTranscript.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      return newTranscript;
     });
 
     if (speaker === 'Usuário') {
@@ -107,19 +110,22 @@ export const useSimplifiedTranscriptManager = () => {
 
   const startNewTurn = useCallback(() => {
     const turnId = generateTurnId();
+    const startTime = new Date();
+    
     currentTurnRef.current = {
       turnId,
       userFragments: [],
       userTranscript: "",
       aiTranscript: "",
-      startTime: new Date(),
+      startTime,
       isComplete: false
     };
     
     // Reset fragment buffer for new turn
     userFragmentBufferRef.current = [];
+    turnStartTimeRef.current = startTime;
     
-    console.log(`🔄 Started new turn: ${turnId}`);
+    console.log(`🔄 Started new turn: ${turnId} at ${startTime.toISOString()}`);
     return turnId;
   }, [generateTurnId]);
 
@@ -129,7 +135,7 @@ export const useSimplifiedTranscriptManager = () => {
 
     console.log(`📥 Accumulating user fragment: "${cleanedFragment}"`);
     
-    // Add to fragment buffer
+    // Add to fragment buffer (less aggressive filtering for fragments)
     userFragmentBufferRef.current.push(cleanedFragment);
     
     // Update current turn if exists
@@ -185,12 +191,16 @@ export const useSimplifiedTranscriptManager = () => {
     
     if (!currentTurnRef.current) return null;
     
-    // Add AI transcript when generation is complete
+    // Add AI transcript when generation is complete, but set timestamp to be AFTER user input
     if (pendingAiTranscriptRef.current.trim()) {
+      // Calculate timestamp to ensure AI response appears after user input
+      const aiTimestamp = new Date(Date.now() + 1000); // 1 second after current time
+      
       const aiEntry = addToTranscript(
         "Mari", 
         pendingAiTranscriptRef.current.trim(),
-        currentTurnRef.current.turnId
+        currentTurnRef.current.turnId,
+        aiTimestamp
       );
       pendingAiTranscriptRef.current = "";
       return aiEntry;
@@ -215,14 +225,16 @@ export const useSimplifiedTranscriptManager = () => {
       console.log(`✅ Finalizing complete user transcript: "${fullUserTranscript}"`);
       
       if (fullUserTranscript && fullUserTranscript !== lastUserEntryRef.current) {
+        // Use turn start time for user input to ensure it appears before AI response
+        const userTimestamp = turnStartTimeRef.current || new Date(Date.now() - 2000);
+        
         const userEntry = addToTranscript(
           "Usuário", 
           fullUserTranscript,
-          currentTurnRef.current.turnId
+          currentTurnRef.current.turnId,
+          userTimestamp
         );
         if (userEntry) {
-          // Adjust timestamp to be slightly before AI response for proper ordering
-          userEntry.timestamp = new Date(Date.now() - 1000);
           results.push(userEntry);
         }
       }
@@ -237,6 +249,7 @@ export const useSimplifiedTranscriptManager = () => {
     
     // Reset for next turn
     currentTurnRef.current = null;
+    turnStartTimeRef.current = null;
     
     console.log(`✅ Turn completed, added ${results.length} entries`);
     return results;
@@ -253,10 +266,12 @@ export const useSimplifiedTranscriptManager = () => {
       console.log(`🔄 Finalizing interrupted user transcript: "${fullUserTranscript}"`);
       
       if (fullUserTranscript) {
+        const userTimestamp = turnStartTimeRef.current || new Date(Date.now() - 1000);
         const userEntry = addToTranscript(
           "Usuário", 
           fullUserTranscript,
-          currentTurnRef.current.turnId
+          currentTurnRef.current.turnId,
+          userTimestamp
         );
         
         // Clear buffers
@@ -264,6 +279,7 @@ export const useSimplifiedTranscriptManager = () => {
         
         // Reset turn state
         currentTurnRef.current = null;
+        turnStartTimeRef.current = null;
         
         return userEntry;
       }
@@ -281,6 +297,7 @@ export const useSimplifiedTranscriptManager = () => {
     turnCounterRef.current = 0;
     lastUserEntryRef.current = "";
     lastAiEntryRef.current = "";
+    turnStartTimeRef.current = null;
     setTranscript([]);
   }, []);
 
@@ -290,7 +307,8 @@ export const useSimplifiedTranscriptManager = () => {
       currentTurn: currentTurnRef.current,
       fragmentBuffer: userFragmentBufferRef.current,
       pendingAi: pendingAiTranscriptRef.current,
-      fragmentCount: userFragmentBufferRef.current.length
+      fragmentCount: userFragmentBufferRef.current.length,
+      turnStartTime: turnStartTimeRef.current
     };
   }, []);
 
