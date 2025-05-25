@@ -9,7 +9,7 @@ interface TranscriptionSegment {
 
 export class TranscriptionCleaner {
   private ai: GoogleGenAI;
-  private model = 'gemini-2.0-flash-lite';
+  private model = 'gemini-2.5-flash-preview-05-20';
 
   constructor(apiKey: string) {
     this.ai = new GoogleGenAI({ apiKey });
@@ -33,12 +33,13 @@ export class TranscriptionCleaner {
       console.log("Current accumulated:", currentAccumulated);
       console.log("Speaker:", speaker);
       
-      const prompt = `You are a transcription cleanup specialist for Portuguese conversations. 
+      const config = {
+        responseMimeType: 'text/plain',
+        systemInstruction: [
+          {
+            text: `You are a transcription cleanup specialist for Portuguese conversations. 
 
 TASK: Clean and correct the fragmented transcription segments to create a coherent, properly formatted sentence.
-
-CURRENT ACCUMULATED TEXT: "${currentAccumulated}"
-RAW SEGMENTS: ${segmentTexts}
 
 RULES:
 1. Remove all <noise> markers
@@ -60,22 +61,27 @@ Output: "G4 Educação"
 Input: "p o d e  p o d e  s i m"
 Output: "pode sim"
 
-Return only the cleaned transcription:`;
+Return only the cleaned transcription:`
+          }
+        ],
+      };
 
       const contents = [
         {
           role: 'user',
-          parts: [{ text: prompt }]
+          parts: [
+            {
+              text: `CURRENT ACCUMULATED TEXT: "${currentAccumulated}"
+RAW SEGMENTS: ${segmentTexts}
+
+Clean this transcription:`
+            }
+          ]
         }
       ];
 
-      const config = {
-        temperature: 0.1,
-        maxOutputTokens: 200
-      };
-
-      console.log("=== SENDING TO GEMINI ===");
-      console.log("Prompt:", prompt);
+      console.log("=== SENDING TO GEMINI 2.5 FLASH ===");
+      console.log("Input text for cleaning:", `Current: "${currentAccumulated}" | Segments: ${segmentTexts}`);
 
       const response = await this.ai.models.generateContent({
         model: this.model,
@@ -86,7 +92,7 @@ Return only the cleaned transcription:`;
       const cleanedText = response.text?.trim() || currentAccumulated;
       
       console.log("=== TRANSCRIPTION CLEANER OUTPUT ===");
-      console.log("Gemini raw response:", response.text);
+      console.log("Gemini 2.5 Flash raw response:", response.text);
       console.log("Final cleaned text:", cleanedText);
       
       // Additional safety cleanup
@@ -96,7 +102,7 @@ Return only the cleaned transcription:`;
       return finalResult;
       
     } catch (error) {
-      console.error('Error cleaning transcription with Gemini 2.0 Flash Lite:', error);
+      console.error('Error cleaning transcription with Gemini 2.5 Flash:', error);
       // Fallback to basic cleaning
       const fallback = this.basicCleanup(currentAccumulated);
       console.log("Using fallback cleanup:", fallback);

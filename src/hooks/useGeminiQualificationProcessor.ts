@@ -1,3 +1,4 @@
+
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -113,12 +114,6 @@ CONTEXTO IMPORTANTE:
 - Números de funcionários devem ser extraídos como números inteiros
 - Faturamento deve manter formato mencionado (ex: "5 milhões", "500 mil")
 
-DADOS ATUAIS:
-${JSON.stringify(currentData, null, 2)}
-
-CONVERSA COMPLETA:
-${conversationText}
-
 INSTRUÇÕES:
 1. Analise TODO o contexto da conversa desde o início
 2. Extraia informações que foram CLARAMENTE mencionadas OU que podem ser deduzidas do contexto
@@ -140,46 +135,52 @@ RESPOSTA (JSON apenas):`
         ],
       };
 
-      const model = 'gemini-2.0-flash-lite';
+      const model = 'gemini-2.5-flash-preview-05-20';
       const contents = [
         {
           role: 'user',
           parts: [
             {
-              text: `Analise esta conversa completa e extraia TODOS os dados de qualificação mencionados:\n${conversationText}`
+              text: `DADOS ATUAIS:
+${JSON.stringify(currentData, null, 2)}
+
+CONVERSA COMPLETA:
+${conversationText}
+
+Analise esta conversa completa e extraia TODOS os dados de qualificação mencionados:`
             },
           ],
         },
       ];
 
-      console.log('Sending conversation to Gemini 2.0 Flash Lite for qualification:', conversationText);
+      console.log('=== SENDING TO GEMINI 2.5 FLASH FOR QUALIFICATION ===');
+      console.log('Current data:', currentData);
+      console.log('Conversation:', conversationText);
 
-      const response = await ai.models.generateContentStream({
+      const response = await ai.models.generateContent({
         model,
         config,
         contents,
       });
 
-      let responseText = '';
-      for await (const chunk of response) {
-        if (chunk.text) {
-          responseText += chunk.text;
-        }
-      }
+      const responseText = response.text || '';
       
-      console.log('Gemini 2.0 Flash Lite qualification response:', responseText);
+      console.log('=== GEMINI 2.5 FLASH QUALIFICATION RESPONSE ===');
+      console.log('Raw response:', responseText);
 
       try {
         // Clean the response (remove markdown formatting if present)
         const cleanedResponse = responseText.replace(/```json\n?|\n?```/g, '').trim();
         const extractedData = JSON.parse(cleanedResponse);
         
+        console.log('Parsed extracted data:', extractedData);
+        
         // Process extracted data and create log entries
         const updates: Partial<QualificationData> = {};
         const hasUpdates = Object.keys(extractedData).length > 0;
         
         if (!hasUpdates) {
-          console.log('No qualification updates from Gemini 2.0 Flash Lite');
+          console.log('No qualification updates from Gemini 2.5 Flash');
           return;
         }
 
@@ -190,6 +191,8 @@ RESPOSTA (JSON apenas):`
             // Only update if the value is different
             if (value !== oldValue) {
               (updates as any)[key] = value;
+              
+              console.log(`Updating field ${key}: ${oldValue} → ${value}`);
               
               // Create log entry
               onLogEntry({
@@ -205,12 +208,14 @@ RESPOSTA (JSON apenas):`
         });
 
         if (Object.keys(updates).length > 0) {
-          console.log('Updating qualification data from Gemini 2.0 Flash Lite:', updates);
+          console.log('Updating qualification data from Gemini 2.5 Flash:', updates);
           onDataUpdate(updates);
+        } else {
+          console.log('No new updates to apply');
         }
 
       } catch (parseError) {
-        console.error('Error parsing Gemini 2.0 Flash Lite response:', parseError);
+        console.error('Error parsing Gemini 2.5 Flash response:', parseError);
         console.error('Raw response was:', responseText);
         
         // Fallback: create log entry for processing attempt
@@ -225,7 +230,7 @@ RESPOSTA (JSON apenas):`
       }
 
     } catch (error) {
-      console.error('Error in Gemini 2.0 Flash Lite qualification processing:', error);
+      console.error('Error in Gemini 2.5 Flash qualification processing:', error);
       
       onLogEntry({
         timestamp: new Date(),
