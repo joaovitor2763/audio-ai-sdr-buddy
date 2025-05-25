@@ -5,6 +5,7 @@ interface TranscriptEntry {
   speaker: string;
   text: string;
   timestamp: Date;
+  id: string;
 }
 
 interface TranscriptionSegment {
@@ -20,6 +21,13 @@ export const useTranscriptManager = (apiKey?: string) => {
   const addedEntriesRef = useRef<Set<string>>(new Set());
   const currentUserTextRef = useRef<string>("");
   const currentAiTextRef = useRef<string>("");
+  const userTextBufferRef = useRef<string>("");
+  const userTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Generate a unique ID for transcript entries
+  const generateEntryId = (): string => {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
 
   // Generate a unique key for transcript entries to prevent duplicates
   const generateEntryKey = (speaker: string, text: string): string => {
@@ -46,11 +54,18 @@ export const useTranscriptManager = (apiKey?: string) => {
       return null;
     }
 
-    const newEntry = { speaker, text: trimmedText, timestamp: new Date() };
+    const newEntry = { 
+      speaker, 
+      text: trimmedText, 
+      timestamp: new Date(),
+      id: generateEntryId()
+    };
     
     setTranscript(prev => {
       console.log(`📝 Added to transcript: ${speaker}: ${trimmedText}`);
-      return [...prev, newEntry];
+      // Sort by timestamp to maintain chronological order
+      const updated = [...prev, newEntry].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      return updated;
     });
 
     // Track this entry to prevent duplicates
@@ -65,9 +80,9 @@ export const useTranscriptManager = (apiKey?: string) => {
     return newEntry;
   }, []);
 
-  // Handle user transcript - add immediately
+  // Handle fragmented user transcript from Live API
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
-    console.log("🎤 User transcript received:", {
+    console.log("🎤 User transcript fragment received:", {
       text: transcriptText,
       isFinal: isFinal,
       length: transcriptText.length
@@ -81,15 +96,42 @@ export const useTranscriptManager = (apiKey?: string) => {
     // Clean the text
     const cleanedText = transcriptText.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
     
-    if (cleanedText && cleanedText.length >= 2) {
-      // Check if this is different from what we already showed
-      if (cleanedText !== currentUserTextRef.current) {
-        console.log("✅ Adding user transcript immediately:", cleanedText);
-        currentUserTextRef.current = cleanedText;
-        return addToTranscript("Usuário", cleanedText);
-      }
+    if (!cleanedText || cleanedText.length < 2) {
+      return null;
     }
-    
+
+    // Add to buffer for fragmented messages
+    userTextBufferRef.current += (userTextBufferRef.current ? ' ' : '') + cleanedText;
+
+    // Clear existing timeout
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+    }
+
+    // If this is marked as final, process immediately
+    if (isFinal) {
+      const finalText = userTextBufferRef.current.trim();
+      if (finalText && finalText !== currentUserTextRef.current) {
+        console.log("✅ Adding final user transcript:", finalText);
+        currentUserTextRef.current = finalText;
+        userTextBufferRef.current = "";
+        return addToTranscript("Usuário", finalText);
+      }
+      userTextBufferRef.current = "";
+      return null;
+    }
+
+    // For non-final fragments, wait for more content or timeout
+    userTimeoutRef.current = setTimeout(() => {
+      const bufferedText = userTextBufferRef.current.trim();
+      if (bufferedText && bufferedText !== currentUserTextRef.current && bufferedText.length >= 3) {
+        console.log("✅ Adding buffered user transcript after timeout:", bufferedText);
+        currentUserTextRef.current = bufferedText;
+        addToTranscript("Usuário", bufferedText);
+      }
+      userTextBufferRef.current = "";
+    }, 1500); // Wait 1.5 seconds for more fragments
+
     return null;
   }, [addToTranscript]);
 
@@ -111,25 +153,48 @@ export const useTranscriptManager = (apiKey?: string) => {
     return null;
   }, [addToTranscript]);
 
-  // Simple interruption handler
+  // Handle interruption - clear user buffer
   const handleInterruption = useCallback(async () => {
     console.log("⚠️ Handling transcript interruption");
-    // Reset current text refs on interruption
+    
+    // Clear user text buffer and timeout on interruption
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
+    }
+    userTextBufferRef.current = "";
     currentUserTextRef.current = "";
     currentAiTextRef.current = "";
+    
     return null;
   }, []);
 
-  // Simple turn complete handler
+  // Handle turn completion
   const handleTurnComplete = useCallback(async () => {
     console.log("🏁 Turn completed");
-    // Reset refs for next turn
+    
+    // Process any remaining buffered user text
+    if (userTextBufferRef.current.trim()) {
+      const finalText = userTextBufferRef.current.trim();
+      if (finalText !== currentUserTextRef.current) {
+        console.log("✅ Adding remaining buffered user text on turn complete:", finalText);
+        addToTranscript("Usuário", finalText);
+      }
+    }
+    
+    // Clear timeouts and buffers
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
+    }
+    userTextBufferRef.current = "";
     currentUserTextRef.current = "";
     currentAiTextRef.current = "";
+    
     return [];
-  }, []);
+  }, [addToTranscript]);
 
-  // Simple generation complete handler
+  // Handle generation completion
   const handleGenerationComplete = useCallback(() => {
     console.log("🎯 Generation completed");
     currentAiTextRef.current = "";
@@ -137,8 +202,15 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, []);
 
   const clearTranscripts = useCallback(() => {
+    // Clear all timeouts
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
+    }
+    
     currentUserTextRef.current = "";
     currentAiTextRef.current = "";
+    userTextBufferRef.current = "";
     addedEntriesRef.current.clear();
     setTranscript([]);
   }, []);
