@@ -2,8 +2,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { CheckCircle, Circle, Target, Clock } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { CheckCircle, Circle, Target } from "lucide-react";
 
 interface QualificationData {
   nome_completo: string;
@@ -20,18 +19,21 @@ interface QualificationData {
   qualificador_nome: string;
 }
 
-interface ExtractionLogEntry {
-  field: string;
-  value: any;
+interface QualificationLogEntry {
   timestamp: Date;
+  field: string;
+  oldValue: any;
+  newValue: any;
+  source: 'user' | 'ai' | 'system';
+  confidence: 'high' | 'medium' | 'low';
 }
 
 interface QualificationStatusProps {
   data: QualificationData;
-  extractionLog?: ExtractionLogEntry[];
+  extractionLog?: QualificationLogEntry[];
 }
 
-const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusProps) => {
+const QualificationStatus = ({ data }: QualificationStatusProps) => {
   const fields = [
     { key: 'nome_completo', label: 'Nome Completo', required: true },
     { key: 'nome_empresa', label: 'Nome da Empresa', required: true },
@@ -53,20 +55,6 @@ const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusPr
 
   const completionPercentage = (completedFields.length / fields.length) * 100;
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('pt-BR', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      second: '2-digit' 
-    });
-  };
-
-  const getFieldLabel = (fieldKey: string) => {
-    const field = fields.find(f => f.key === fieldKey);
-    return field?.label || fieldKey;
-  };
-
-  // Helper function to safely convert any value to string for rendering
   const safeStringify = (value: any): string => {
     if (value === null || value === undefined) return '';
     if (typeof value === 'string') return value;
@@ -77,99 +65,71 @@ const QualificationStatus = ({ data, extractionLog = [] }: QualificationStatusPr
   };
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Target className="h-5 w-5" />
-            Qualification Progress
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <div className="flex justify-between text-sm mb-2">
-              <span>Progress</span>
-              <span>{completedFields.length}/{fields.length}</span>
-            </div>
-            <Progress value={completionPercentage} className="h-2" />
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Target className="h-5 w-5" />
+          Qualification Progress
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <div className="flex justify-between text-sm mb-2">
+            <span>Progress</span>
+            <span>{completedFields.length}/{fields.length}</span>
           </div>
+          <Progress value={completionPercentage} className="h-2" />
+        </div>
 
-          <div className="space-y-2">
-            {fields.map((field) => {
-              const value = data[field.key as keyof QualificationData];
-              const isCompleted = value && value !== "" && value !== 0;
-              
-              return (
-                <div key={field.key} className="flex items-center gap-2 text-sm">
+        <div className="space-y-3">
+          {fields.map((field) => {
+            const value = data[field.key as keyof QualificationData];
+            const isCompleted = value && value !== "" && value !== 0;
+            const displayValue = safeStringify(value);
+            
+            return (
+              <div key={field.key} className="p-3 rounded-lg border bg-gray-50">
+                <div className="flex items-center gap-2 mb-1">
                   {isCompleted ? (
                     <CheckCircle className="h-4 w-4 text-green-500" />
                   ) : (
                     <Circle className="h-4 w-4 text-gray-300" />
                   )}
-                  <span className={isCompleted ? "text-green-700" : "text-gray-500"}>
+                  <span className={`font-medium ${isCompleted ? "text-green-700" : "text-gray-500"}`}>
                     {field.label}
                   </span>
-                  {isCompleted && (
-                    <Badge variant="secondary" className="ml-auto text-xs">
-                      {(() => {
-                        const stringValue = safeStringify(value);
-                        return stringValue.length > 20 ? 
-                          `${stringValue.substring(0, 20)}...` : 
-                          stringValue;
-                      })()}
-                    </Badge>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-
-          {completionPercentage === 100 && (
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <CheckCircle className="h-6 w-6 text-green-600 mx-auto mb-2" />
-              <p className="text-sm text-green-700 font-medium">
-                Qualification Complete!
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {extractionLog.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="h-5 w-5" />
-              Extraction Log
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-48 p-4">
-              <div className="space-y-2">
-                {extractionLog.slice(-10).reverse().map((entry, index) => (
-                  <div key={index} className="flex items-center gap-2 text-xs">
-                    <Badge variant="outline" className="text-xs">
-                      {formatTime(entry.timestamp)}
-                    </Badge>
-                    <span className="font-medium text-blue-600">
-                      {getFieldLabel(entry.field)}:
-                    </span>
-                    <span className="text-gray-700">
-                      {(() => {
-                        const stringValue = safeStringify(entry.value);
-                        return stringValue.length > 30 ? 
-                          `${stringValue.substring(0, 30)}...` : 
-                          stringValue;
-                      })()}
-                    </span>
+                
+                {isCompleted ? (
+                  <div className="ml-6 text-sm text-gray-700 bg-white p-2 rounded border">
+                    {displayValue.length > 50 ? 
+                      `${displayValue.substring(0, 50)}...` : 
+                      displayValue
+                    }
                   </div>
-                ))}
+                ) : (
+                  <div className="ml-6 text-xs text-gray-400 italic">
+                    Aguardando informação...
+                  </div>
+                )}
               </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+            );
+          })}
+        </div>
+
+        {completionPercentage === 100 && (
+          <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
+            <CheckCircle className="h-8 w-8 text-green-600 mx-auto mb-2" />
+            <p className="text-sm text-green-700 font-medium">
+              Qualification Complete!
+            </p>
+            <p className="text-xs text-green-600 mt-1">
+              All required information has been collected
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };
 
