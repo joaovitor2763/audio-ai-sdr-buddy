@@ -58,7 +58,7 @@ const Index = () => {
     clearTranscripts 
   } = useTranscriptManager(apiKey);
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
-  const { processFullConversation, resetProcessor } = useGeminiQualificationProcessor(apiKey);
+  const { processTranscriptForQualification, resetProcessor } = useGeminiQualificationProcessor(apiKey);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -100,10 +100,10 @@ const Index = () => {
       stopAllAudio();
       const userEntry = await handleInterruption();
       if (userEntry) {
-        console.log("Processing interrupted user entry - triggering full conversation analysis");
-        // Process full conversation after user interruption
+        console.log("Processing qualification after user interruption");
+        // Process qualification after user interruption
         setTimeout(() => {
-          processFullConversation(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
+          processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
         }, 500);
       }
     }
@@ -122,7 +122,7 @@ const Index = () => {
       if (transcriptText.trim()) {
         const userEntry = handleUserTranscript(transcriptText, true);
         if (userEntry) {
-          console.log("User transcript finalized - will trigger full conversation analysis");
+          console.log("User transcript finalized - will process qualification");
         }
       }
     }
@@ -184,15 +184,15 @@ const Index = () => {
       }
     }
 
-    // Handle turn completion - TRIGGER FULL CONVERSATION ANALYSIS
+    // Handle turn completion - PROCESS QUALIFICATION EVERY TURN
     if (message.serverContent?.turnComplete) {
-      console.log("Turn complete detected - finalizing transcriptions and triggering full analysis");
+      console.log("Turn complete detected - finalizing transcriptions and processing qualification");
       const entries = await handleTurnComplete();
       
-      // Wait a moment for transcript to be updated, then process full conversation
+      // Process qualification after each complete turn
       setTimeout(() => {
-        console.log("Processing full conversation after turn complete");
-        processFullConversation(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
+        console.log("Processing qualification after turn complete");
+        processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
       }, 1000);
     }
 
@@ -201,10 +201,10 @@ const Index = () => {
       console.log("Generation complete detected");
       const aiEntry = handleGenerationComplete();
       
-      // Also trigger full conversation analysis after generation complete
+      // Also process qualification after generation complete
       setTimeout(() => {
-        console.log("Processing full conversation after generation complete");
-        processFullConversation(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
+        console.log("Processing qualification after generation complete");
+        processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
       }, 1000);
     }
   };

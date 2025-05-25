@@ -50,10 +50,9 @@ interface StructuredQualificationOutput {
 
 export const useGeminiQualificationProcessor = (apiKey: string) => {
   const processingRef = useRef<boolean>(false);
-  const fullConversationRef = useRef<ConversationEntry[]>([]);
-  const lastFullProcessRef = useRef<number>(0);
+  const lastProcessedTranscriptLength = useRef<number>(0);
 
-  const processFullConversation = useCallback(async (
+  const processTranscriptForQualification = useCallback(async (
     conversationHistory: ConversationEntry[],
     currentData: Partial<QualificationData>,
     onDataUpdate: (data: Partial<QualificationData>) => void,
@@ -64,32 +63,28 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Prevent concurrent processing
-    if (processingRef.current) {
-      console.log('Full conversation processing already in progress, skipping');
+    // Skip if no new conversation data
+    if (conversationHistory.length <= lastProcessedTranscriptLength.current) {
+      console.log('No new transcript data to process');
       return;
     }
 
-    // Rate limiting - process at most every 3 seconds for full conversation
-    const now = Date.now();
-    if (now - lastFullProcessRef.current < 3000) {
-      console.log('Rate limiting full conversation processing');
+    // Prevent concurrent processing
+    if (processingRef.current) {
+      console.log('Processing already in progress, skipping');
       return;
     }
 
     processingRef.current = true;
-    lastFullProcessRef.current = now;
-
-    // Update conversation history
-    fullConversationRef.current = [...conversationHistory];
+    lastProcessedTranscriptLength.current = conversationHistory.length;
 
     try {
       const ai = new GoogleGenAI({
         apiKey: apiKey,
       });
 
-      // Build complete conversation context
-      const fullConversation = fullConversationRef.current
+      // Build conversation context with ONLY actual transcript entries
+      const actualConversation = conversationHistory
         .filter(entry => entry.speaker !== 'System') // Exclude system messages
         .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
         .map(entry => {
@@ -102,56 +97,46 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         })
         .join('\n');
 
-      console.log('=== PROCESSING FULL CONVERSATION ===');
-      console.log('Full conversation:', fullConversation);
-      console.log('Current data:', currentData);
+      console.log('=== PROCESSING TRANSCRIPT FOR QUALIFICATION ===');
+      console.log('Actual conversation transcript:', actualConversation);
+      console.log('Current qualification data:', currentData);
 
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em extração de dados de qualificação de leads para empresas brasileiras.
+            text: `Você é um especialista em extração de dados de qualificação de leads brasileiros.
 
-TAREFA: Analise toda a conversa e extraia TODAS as informações disponíveis de qualificação.
+TAREFA CRÍTICA: Extraia SOMENTE informações que estão EXPLICITAMENTE mencionadas na transcrição da conversa.
 
-IMPORTANTE - REGRAS DE IDIOMA:
-- SEMPRE responda em português brasileiro
-- IGNORE qualquer texto em outros idiomas na conversa (pode ser erro de transcrição)
-- Se encontrar texto em árabe, chinês ou outros idiomas, DESCONSIDERE completamente
-- Foque apenas nas partes da conversa em português
+REGRAS OBRIGATÓRIAS:
+1. NUNCA invente ou assuma informações que não estão na transcrição
+2. Se uma informação NÃO foi mencionada na conversa, use EXATAMENTE: "Informação não abordada na call"
+3. Use apenas português brasileiro nas respostas
+4. Extraia apenas o que foi LITERALMENTE dito pelo usuário ou confirmado pela Mari
 
-DADOS PARA EXTRAIR:
-- nome_completo: Nome completo da pessoa
-- nome_empresa: Nome da empresa (ex: "Empreende Brasil", "G4 Educação")
-- como_conheceu_g4: Como conheceu o G4 (ex: "Instagram", "LinkedIn", "indicação")
-- faturamento_anual_aproximado: Faturamento da empresa (preservar formato original)
-- total_funcionarios_empresa: Número de funcionários (apenas número)
-- setor_empresa: Setor/área de atuação
-- principal_desafio: Principal desafio mencionado
-- melhor_dia_contato_especialista: Dia preferido para contato
-- melhor_horario_contato_especialista: Horário preferido
-- preferencia_contato_especialista: Canal preferido (Ligação/WhatsApp)
-- telefone: Telefone para contato
-- analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Observações sobre a extração
+DADOS PARA EXTRAIR (somente se mencionados na conversa):
+- nome_completo: Nome completo da pessoa (só se o usuário falou)
+- nome_empresa: Nome da empresa (só se o usuário mencionou)
+- como_conheceu_g4: Como conheceu o G4 (só se o usuário respondeu)
+- faturamento_anual_aproximado: Faturamento da empresa (só se o usuário informou)
+- total_funcionarios_empresa: Número de funcionários (só se o usuário disse - apenas número)
+- setor_empresa: Setor/área de atuação (só se o usuário informou)
+- principal_desafio: Principal desafio mencionado (só se o usuário falou)
+- melhor_dia_contato_especialista: Dia preferido (só se o usuário escolheu)
+- melhor_horario_contato_especialista: Horário preferido (só se o usuário escolheu)
+- preferencia_contato_especialista: Canal preferido (só se o usuário escolheu)
+- telefone: Telefone para contato (só se o usuário forneceu)
+- analysis_confidence: "alta", "média" ou "baixa" 
+- extraction_notes: Observações sobre o que foi extraído
 
-ESTRATÉGIA DE EXTRAÇÃO:
-1. PRIORIDADE MÁXIMA: Respostas diretas do usuário
-2. SEGUNDA PRIORIDADE: Confirmações da Mari baseadas em respostas do usuário
-3. TERCEIRA PRIORIDADE: Inferências do contexto da conversa
+EXEMPLOS CORRETOS:
+- Usuário diz "Meu nome é João" → nome_completo: "João"
+- Usuário diz "Trabalho na Microsoft" → nome_empresa: "Microsoft"  
+- Usuário diz "Conheci pelo Instagram" → como_conheceu_g4: "Instagram"
+- Se usuário NÃO mencionou telefone → telefone: "Informação não abordada na call"
 
-EXEMPLOS DE EXTRAÇÃO:
-- Usuário: "Meu nome é João Vítor" → nome_completo: "João Vítor"
-- Usuário: "A minha empresa é Empreende Brasil" → nome_empresa: "Empreende Brasil"
-- Mari: "Obrigada, João Vítor" (após pergunta sobre nome) → nome_completo: "João Vítor"
-- Mari: "porte da Empreende Brasil" → nome_empresa: "Empreende Brasil"
-
-REGRAS IMPORTANTES:
-- Se não há informação clara: "Informação não identificada"
-- Para funcionários: extrair apenas o número
-- Preservar exatamente como mencionado
-- Considerar toda a conversa, não apenas partes isoladas
-- SEMPRE responder em português brasileiro`
+IMPORTANTE: Se não há conversa ou se uma informação específica não foi mencionada pelo usuário, use "Informação não abordada na call"`
           }
         ],
       };
@@ -162,19 +147,19 @@ REGRAS IMPORTANTES:
           role: 'user',
           parts: [
             {
-              text: `CONVERSA COMPLETA PARA ANÁLISE:
-${fullConversation}
+              text: `TRANSCRIÇÃO COMPLETA DA CONVERSA:
+${actualConversation}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Analise toda a conversa e extraia TODAS as informações de qualificação disponíveis:`
+Extraia SOMENTE as informações que foram EXPLICITAMENTE mencionadas na transcrição acima:`
             },
           ],
         },
       ];
 
-      console.log('=== SENDING FULL CONVERSATION TO GEMINI ===');
+      console.log('=== SENDING TRANSCRIPT TO GEMINI FOR EXTRACTION ===');
 
       const response = await ai.models.generateContent({
         model,
@@ -184,14 +169,14 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
 
       const responseText = response.text || '';
       
-      console.log('=== GEMINI FULL EXTRACTION RESPONSE ===');
+      console.log('=== GEMINI QUALIFICATION EXTRACTION RESPONSE ===');
       console.log('Raw response:', responseText);
 
       try {
         const cleanedResponse = responseText.replace(/```json\n?|\n?```/g, '').trim();
         const extractedData: StructuredQualificationOutput = JSON.parse(cleanedResponse);
         
-        console.log('Parsed full extraction:', extractedData);
+        console.log('Parsed qualification extraction:', extractedData);
         
         // Process extracted data and create updates
         const updates: Partial<QualificationData> = {};
@@ -202,7 +187,12 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
             return;
           }
 
-          if (value && value !== '' && value !== 'Informação não identificada' && value !== 'Informação não abordada na call') {
+          // Only update if the value is meaningful and different from "Informação não abordada na call"
+          if (value && 
+              value !== '' && 
+              value !== 'Informação não abordada na call' && 
+              value !== 'Informação não identificada') {
+            
             const oldValue = currentData[key as keyof QualificationData];
             
             // Convert total_funcionarios_empresa to number
@@ -222,7 +212,7 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
               (updates as any)[key] = processedValue;
               hasUpdates = true;
               
-              console.log(`Full conversation update - ${key}: ${oldValue} → ${processedValue}`);
+              console.log(`Qualification update - ${key}: ${oldValue} → ${processedValue}`);
               
               onLogEntry({
                 timestamp: new Date(),
@@ -238,7 +228,7 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
         });
 
         if (hasUpdates) {
-          console.log('Applying full conversation updates:', updates);
+          console.log('Applying qualification updates:', updates);
           onDataUpdate(updates);
           
           if (extractedData.extraction_notes) {
@@ -246,38 +236,38 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
               timestamp: new Date(),
               field: 'system',
               oldValue: null,
-              newValue: `Full Analysis: ${extractedData.extraction_notes}`,
+              newValue: `Extraction Notes: ${extractedData.extraction_notes}`,
               source: 'ai',
               confidence: extractedData.analysis_confidence === 'alta' ? 'high' : 
                         extractedData.analysis_confidence === 'média' ? 'medium' : 'low'
             });
           }
         } else {
-          console.log('No new qualification data from full conversation analysis');
+          console.log('No new qualification data extracted from transcript');
         }
 
       } catch (parseError) {
-        console.error('Error parsing full conversation extraction:', parseError);
+        console.error('Error parsing qualification extraction:', parseError);
         console.error('Raw response was:', responseText);
         
         onLogEntry({
           timestamp: new Date(),
           field: 'system',
           oldValue: null,
-          newValue: 'Full conversation processing error: Invalid format',
+          newValue: 'Qualification processing error: Invalid format',
           source: 'system',
           confidence: 'low'
         });
       }
 
     } catch (error) {
-      console.error('Error in full conversation processing:', error);
+      console.error('Error in qualification processing:', error);
       
       onLogEntry({
         timestamp: new Date(),
         field: 'system',
         oldValue: null,
-        newValue: `Full conversation error: ${error.message}`,
+        newValue: `Qualification error: ${error.message}`,
         source: 'system',
         confidence: 'low'
       });
@@ -287,13 +277,12 @@ Analise toda a conversa e extraia TODAS as informações de qualificação dispo
   }, [apiKey]);
 
   const resetProcessor = useCallback(() => {
-    fullConversationRef.current = [];
     processingRef.current = false;
-    lastFullProcessRef.current = 0;
+    lastProcessedTranscriptLength.current = 0;
   }, []);
 
   return {
-    processFullConversation,
+    processTranscriptForQualification,
     resetProcessor
   };
 };
