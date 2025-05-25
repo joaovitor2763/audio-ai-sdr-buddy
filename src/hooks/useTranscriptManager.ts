@@ -32,10 +32,13 @@ export const useTranscriptManager = () => {
       lastUserText: lastUserTextRef.current
     });
     
-    if (textToFinalize && textToFinalize !== lastUserTextRef.current && textToFinalize.length >= 3) {
-      console.log("Adding finalized user transcript:", textToFinalize);
-      const entry = addToTranscript("Usuário", textToFinalize);
-      lastUserTextRef.current = textToFinalize;
+    // Filter out noise and ensure we have meaningful content
+    const cleanedText = textToFinalize.replace(/<noise>/g, '').trim();
+    
+    if (cleanedText && cleanedText !== lastUserTextRef.current && cleanedText.length >= 2) {
+      console.log("Adding finalized user transcript:", cleanedText);
+      const entry = addToTranscript("Usuário", cleanedText);
+      lastUserTextRef.current = cleanedText;
       pendingUserTranscriptRef.current = "";
       isUserTurnRef.current = false;
       return entry;
@@ -44,7 +47,7 @@ export const useTranscriptManager = () => {
     return null;
   }, [addToTranscript]);
 
-  // Accumulate user input during their turn - don't show until turn ends
+  // Accumulate user input fragments during their turn
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
     console.log("Live API user transcript received:", {
       text: transcriptText,
@@ -53,8 +56,8 @@ export const useTranscriptManager = () => {
       currentTurn: isUserTurnRef.current ? 'user' : 'none'
     });
     
-    // Skip empty content
-    if (!transcriptText.trim() || transcriptText.trim().length < 2) {
+    // Skip empty content or pure noise
+    if (!transcriptText.trim() || transcriptText.trim() === '<noise>') {
       return null;
     }
 
@@ -67,9 +70,16 @@ export const useTranscriptManager = () => {
       pendingUserTranscriptRef.current = "";
     }
     
-    // Accumulate the text during user turn
-    pendingUserTranscriptRef.current = trimmedText;
-    console.log("Accumulated user text:", trimmedText);
+    // Accumulate the fragments - this is the key fix
+    if (pendingUserTranscriptRef.current) {
+      // Add space between fragments if needed and not already present
+      const needsSpace = !pendingUserTranscriptRef.current.endsWith(' ') && !trimmedText.startsWith(' ');
+      pendingUserTranscriptRef.current += (needsSpace ? ' ' : '') + trimmedText;
+    } else {
+      pendingUserTranscriptRef.current = trimmedText;
+    }
+    
+    console.log("Accumulated user text:", pendingUserTranscriptRef.current);
     
     // Don't finalize here - wait for turn detection
     return null;
