@@ -105,10 +105,19 @@ const Index = () => {
     }
   };
 
-  // Detect call end keywords
+  // Detect call end keywords - updated to include Mari's specific goodbye
   const detectCallEnd = (text: string): boolean => {
     const endKeywords = ['tchau', 'obrigado', 'obrigada', 'até mais', 'falou', 'bye', 'adeus'];
+    const specificGoodbye = 'vou desligar a call agora';
     const lowerText = text.toLowerCase();
+    
+    // Check for Mari's specific goodbye phrase (priority)
+    if (lowerText.includes(specificGoodbye)) {
+      console.log("🎯 Mari's specific goodbye detected - call completion confirmed");
+      return true;
+    }
+    
+    // Check for general end keywords
     return endKeywords.some(keyword => lowerText.includes(keyword));
   };
 
@@ -126,7 +135,6 @@ const Index = () => {
       console.log("Handling interruption, stopping all audio sources");
       stopAllAudio();
       const userEntry = await handleInterruption();
-      // No longer processing qualification in real-time
     }
 
     // Handle input transcription (what the user said)
@@ -146,7 +154,7 @@ const Index = () => {
         // Check for call end keywords in user input
         if (detectCallEnd(transcriptText)) {
           console.log("🔚 Call end detected in user input:", transcriptText);
-          setTimeout(() => endCallAndProcess(), 2000); // Give 2 seconds for any final responses
+          setTimeout(() => endCallAndProcess(), 3000); // Give 3 seconds for final responses
         }
       }
     }
@@ -161,10 +169,17 @@ const Index = () => {
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
         
-        // Check for call end keywords in AI output
+        // Check for call end keywords in AI output - prioritize Mari's specific goodbye
         if (detectCallEnd(transcriptText)) {
           console.log("🔚 Call end detected in AI output:", transcriptText);
-          setTimeout(() => endCallAndProcess(), 2000);
+          
+          // If it's Mari's specific goodbye, process immediately
+          if (transcriptText.toLowerCase().includes('vou desligar a call agora')) {
+            console.log("🎯 Mari's completion goodbye detected - processing full call");
+            setTimeout(() => endCallAndProcess(), 2000);
+          } else {
+            setTimeout(() => endCallAndProcess(), 3000);
+          }
         }
       }
     }
@@ -221,6 +236,18 @@ const Index = () => {
 
       if (part?.text) {
         handleAiTranscript(part.text);
+        
+        // Also check for call end in text responses
+        if (detectCallEnd(part.text)) {
+          console.log("🔚 Call end detected in AI text response:", part.text);
+          
+          if (part.text.toLowerCase().includes('vou desligar a call agora')) {
+            console.log("🎯 Mari's completion goodbye detected in text - processing full call");
+            setTimeout(() => endCallAndProcess(), 2000);
+          } else {
+            setTimeout(() => endCallAndProcess(), 3000);
+          }
+        }
       }
     }
 
@@ -321,13 +348,16 @@ const Index = () => {
     setIsMuted(false);
     setAudioLevel(0);
     
+    // Clear transcript during processing
+    clearTranscripts();
+    
     addToTranscript("System", "Call ended - Processing full call transcription and qualification...");
     
     addQualificationLogEntry({
       timestamp: new Date(),
       field: 'system',
       oldValue: null,
-      newValue: 'Call ended - Starting post-call processing',
+      newValue: 'Call ended - Starting post-call processing with full audio transcription',
       source: 'system',
       confidence: 'high'
     });
@@ -337,11 +367,19 @@ const Index = () => {
       try {
         toast({
           title: "Processing Call",
-          description: "Transcribing full call and extracting qualification data...",
+          description: "Transcribing full call with speaker labels and extracting qualification data...",
         });
 
-        console.log("🎯 Starting full call transcription");
+        console.log("🎯 Starting full call transcription with speaker labels");
         const transcribedSegments = await transcribeFullCall();
+        
+        // Add transcribed segments to the transcript display
+        transcribedSegments.forEach(segment => {
+          addToTranscript(
+            segment.speaker === 'user' ? 'Usuário' : 'Mari',
+            segment.text
+          );
+        });
         
         addToTranscript("System", `Full call transcribed: ${transcribedSegments.length} segments identified`);
         
@@ -363,7 +401,7 @@ const Index = () => {
         console.error("Error in post-call processing:", error);
         toast({
           title: "Processing Error",
-          description: "Failed to process full call transcription. Using real-time data.",
+          description: "Failed to process full call transcription. Please check console for details.",
           variant: "destructive",
         });
         
