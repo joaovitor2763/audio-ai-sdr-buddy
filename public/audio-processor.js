@@ -5,6 +5,26 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.bufferSize = 1024; // Smaller buffer for better responsiveness
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
+
+    this.port.onmessage = (event) => {
+      if (event.data && event.data.type === 'flush') {
+        this.flushBuffer();
+      }
+    };
+  }
+
+  flushBuffer() {
+    if (this.bufferIndex === 0) return;
+
+    const pcmBuffer = new ArrayBuffer(this.bufferIndex * 2);
+    const pcmView = new DataView(pcmBuffer);
+    for (let j = 0; j < this.bufferIndex; j++) {
+      const sample = Math.max(-1, Math.min(1, this.buffer[j]));
+      const pcmSample = Math.round(sample * 32767);
+      pcmView.setInt16(j * 2, pcmSample, true);
+    }
+    this.port.postMessage({ type: 'audioData', data: pcmBuffer });
+    this.bufferIndex = 0;
   }
 
   process(inputs, outputs, parameters) {
