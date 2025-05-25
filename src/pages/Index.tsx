@@ -227,7 +227,8 @@ const Index = () => {
         onMessage: handleModelTurn,
         onOpen: () => {
           console.log('Gemini Live session opened');
-          addToTranscript("System", "Connected to Gemini Live API");
+          const systemTurnId = `system-${Date.now()}`;
+          addToTranscript("System", "Connected to Gemini Live API", systemTurnId);
           addQualificationLogEntry({
             timestamp: new Date(),
             field: 'system',
@@ -239,11 +240,13 @@ const Index = () => {
         },
         onError: (e: ErrorEvent) => {
           console.error('Gemini Live error:', e.message);
-          addToTranscript("System", `Error: ${e.message}`);
+          const errorTurnId = `error-${Date.now()}`;
+          addToTranscript("System", `Error: ${e.message}`, errorTurnId);
         },
         onClose: (e: CloseEvent) => {
           console.log('Gemini Live session closed:', e.reason);
-          addToTranscript("System", "Session ended");
+          const closeTurnId = `close-${Date.now()}`;
+          addToTranscript("System", "Session ended", closeTurnId);
         }
       });
 
@@ -310,7 +313,8 @@ const Index = () => {
         description: "Lead information has been sent to the CRM system",
       });
       
-      addToTranscript("System", "Qualification data has been successfully submitted to the CRM system.");
+      const webhookTurnId = `webhook-${Date.now()}`;
+      addToTranscript("System", "Qualification data has been successfully submitted to the CRM system.", webhookTurnId);
       
       addQualificationLogEntry({
         timestamp: new Date(),
