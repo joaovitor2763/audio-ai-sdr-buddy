@@ -81,7 +81,7 @@ export const useGeminiSession = () => {
           disabled: false,
           startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
           prefixPaddingMs: 200, // Reduced for better responsiveness
-          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_MEDIUM, // More balanced
+          endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH, // Changed from END_SENSITIVITY_MEDIUM to END_SENSITIVITY_HIGH
           silenceDurationMs: 800 // Reduced silence duration for faster processing
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
