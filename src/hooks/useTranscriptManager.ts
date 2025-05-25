@@ -14,13 +14,7 @@ export const useTranscriptManager = () => {
   const pendingAiTranscriptRef = useRef<string>("");
   const isUserTurnRef = useRef(false);
   const isAiTurnRef = useRef(false);
-  const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastUserTextRef = useRef<string>("");
-
-  // Reduced delays and thresholds for better Live API integration
-  const TRANSCRIPT_FINALIZATION_DELAY = 2000;
-  const MIN_TEXT_LENGTH_FOR_FINALIZATION = 3; // Reduced minimum length
-  const MIN_MEANINGFUL_LENGTH = 5; // Reduced for Live API
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
@@ -32,91 +26,72 @@ export const useTranscriptManager = () => {
   const finalizeUserTranscript = useCallback(() => {
     const textToFinalize = pendingUserTranscriptRef.current.trim();
     
-    console.log("Attempting to finalize user transcript:", {
+    console.log("Finalizing user transcript:", {
       text: textToFinalize,
       length: textToFinalize.length,
       lastUserText: lastUserTextRef.current
     });
     
-    // More permissive conditions for finalization with Live API
-    if (textToFinalize && 
-        textToFinalize !== lastUserTextRef.current && 
-        textToFinalize.length >= MIN_TEXT_LENGTH_FOR_FINALIZATION) {
-      
-      console.log("Finalizing user transcript:", textToFinalize);
+    if (textToFinalize && textToFinalize !== lastUserTextRef.current && textToFinalize.length >= 3) {
+      console.log("Adding finalized user transcript:", textToFinalize);
       const entry = addToTranscript("Usuário", textToFinalize);
       lastUserTextRef.current = textToFinalize;
       pendingUserTranscriptRef.current = "";
       isUserTurnRef.current = false;
       return entry;
-    } else {
-      console.log("User transcript not finalized:", {
-        hasText: !!textToFinalize,
-        isDifferent: textToFinalize !== lastUserTextRef.current,
-        meetsLength: textToFinalize.length >= MIN_TEXT_LENGTH_FOR_FINALIZATION
-      });
     }
+    
     return null;
   }, [addToTranscript]);
 
-  // Simplified transcript handling for Live API input transcription
+  // Accumulate user input during their turn - don't show until turn ends
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
     console.log("Live API user transcript received:", {
       text: transcriptText,
       isFinal: isFinal,
-      length: transcriptText.length
+      length: transcriptText.length,
+      currentTurn: isUserTurnRef.current ? 'user' : 'none'
     });
     
-    // Skip empty content but be more permissive
+    // Skip empty content
     if (!transcriptText.trim() || transcriptText.trim().length < 2) {
-      console.log("Skipping empty/short transcript:", transcriptText);
       return null;
     }
 
     const trimmedText = transcriptText.trim();
     
-    // For Live API, we trust the input transcription more
+    // Start user turn if not already active
+    if (!isUserTurnRef.current) {
+      console.log("Starting user turn");
+      isUserTurnRef.current = true;
+      pendingUserTranscriptRef.current = "";
+    }
+    
+    // Accumulate the text during user turn
     pendingUserTranscriptRef.current = trimmedText;
-    isUserTurnRef.current = true;
+    console.log("Accumulated user text:", trimmedText);
     
-    console.log("Updated pending user transcript:", trimmedText);
-    
-    // Clear existing timeout
-    if (userTranscriptTimeoutRef.current) {
-      clearTimeout(userTranscriptTimeoutRef.current);
-      userTranscriptTimeoutRef.current = null;
-    }
-    
-    // If marked as final by Live API, finalize immediately
-    if (isFinal) {
-      console.log("Live API marked as final, finalizing immediately:", trimmedText);
-      return finalizeUserTranscript();
-    }
-    
-    // Set a shorter timeout for Live API
-    userTranscriptTimeoutRef.current = setTimeout(() => {
-      console.log("Live API transcript timeout reached, finalizing");
-      finalizeUserTranscript();
-    }, TRANSCRIPT_FINALIZATION_DELAY);
-    
+    // Don't finalize here - wait for turn detection
     return null;
-  }, [finalizeUserTranscript]);
+  }, []);
 
   const handleAiTranscript = useCallback((text: string) => {
-    console.log("Mari text received:", text);
+    console.log("AI text received:", text);
+    
+    // If we have pending user transcript and AI is starting to speak, finalize user turn
+    if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
+      console.log("AI speaking detected - finalizing pending user transcript");
+      finalizeUserTranscript();
+    }
+    
     isAiTurnRef.current = true;
     pendingAiTranscriptRef.current += text;
-  }, []);
+  }, [finalizeUserTranscript]);
 
   const handleInterruption = useCallback(() => {
     console.log("Handling transcript interruption");
     
-    if (userTranscriptTimeoutRef.current) {
-      clearTimeout(userTranscriptTimeoutRef.current);
-      userTranscriptTimeoutRef.current = null;
-    }
-    
-    // More aggressive finalization on interruption for Live API
+    // Finalize any pending user transcript on interruption
     if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
       console.log("Finalizing interrupted user transcript:", pendingUserTranscriptRef.current);
       return finalizeUserTranscript();
@@ -128,22 +103,17 @@ export const useTranscriptManager = () => {
   const handleTurnComplete = useCallback(() => {
     console.log("Turn completed - pending user:", pendingUserTranscriptRef.current, "pending AI:", pendingAiTranscriptRef.current);
     
-    if (userTranscriptTimeoutRef.current) {
-      clearTimeout(userTranscriptTimeoutRef.current);
-      userTranscriptTimeoutRef.current = null;
-    }
-    
     const results = [];
     
     // First finalize AI transcript if exists
     if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("Finalizing AI transcript:", pendingAiTranscriptRef.current);
+      console.log("Finalizing AI transcript on turn complete:", pendingAiTranscriptRef.current);
       results.push(addToTranscript("Mari", pendingAiTranscriptRef.current.trim()));
       pendingAiTranscriptRef.current = "";
       isAiTurnRef.current = false;
     }
     
-    // Then finalize user transcript if exists (more permissive for Live API)
+    // Then finalize user transcript if exists
     if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
       console.log("Finalizing user transcript on turn complete:", pendingUserTranscriptRef.current);
       const entry = finalizeUserTranscript();
@@ -167,11 +137,6 @@ export const useTranscriptManager = () => {
   }, [addToTranscript]);
 
   const clearTranscripts = useCallback(() => {
-    if (userTranscriptTimeoutRef.current) {
-      clearTimeout(userTranscriptTimeoutRef.current);
-      userTranscriptTimeoutRef.current = null;
-    }
-    
     pendingUserTranscriptRef.current = "";
     pendingAiTranscriptRef.current = "";
     lastUserTextRef.current = "";
