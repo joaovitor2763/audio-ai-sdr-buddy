@@ -1,5 +1,5 @@
 
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { TranscriptionCleaner } from '@/services/transcriptionCleaner';
 
 interface TranscriptEntry {
@@ -311,7 +311,7 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, []);
 
   // Initialize cleaner when component mounts and API key is available
-  React.useEffect(() => {
+  useEffect(() => {
     if (apiKey) {
       initializeCleaner();
     }
