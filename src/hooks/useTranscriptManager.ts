@@ -1,11 +1,11 @@
-
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { TranscriptionCleaner } from '@/services/transcriptionCleaner';
 
 interface TranscriptEntry {
   speaker: string;
   text: string;
   timestamp: Date;
+  id: string;
 }
 
 interface TranscriptionSegment {
@@ -17,13 +17,24 @@ interface TranscriptionSegment {
 export const useTranscriptManager = (apiKey?: string) => {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   
-  const pendingUserSegmentsRef = useRef<TranscriptionSegment[]>([]);
-  const pendingAiTranscriptRef = useRef<string>("");
-  const isUserTurnRef = useRef(false);
-  const isAiTurnRef = useRef(false);
-  const lastUserTextRef = useRef<string>("");
   const cleanerRef = useRef<TranscriptionCleaner | null>(null);
-  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const addedEntriesRef = useRef<Set<string>>(new Set());
+  const currentUserTextRef = useRef<string>("");
+  const currentAiTextRef = useRef<string>("");
+  const userTextBufferRef = useRef<string>("");
+  const userTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingUserSegmentsRef = useRef<TranscriptionSegment[]>([]);
+  const processingUserTextRef = useRef<boolean>(false);
+
+  // Generate a unique ID for transcript entries
+  const generateEntryId = (): string => {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  // Generate a unique key for transcript entries to prevent duplicates
+  const generateEntryKey = (speaker: string, text: string): string => {
+    return `${speaker}:${text.trim()}`;
+  };
 
   // Initialize cleaner when API key is available
   const initializeCleaner = useCallback(() => {
@@ -34,100 +45,74 @@ export const useTranscriptManager = (apiKey?: string) => {
   }, [apiKey]);
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
-    const newEntry = { speaker, text, timestamp: new Date() };
-    setTranscript(prev => {
-      // Check for duplicates in the last few entries to prevent spam
-      const recent = prev.slice(-3);
-      const isDuplicate = recent.some(entry => 
-        entry.speaker === speaker && 
-        entry.text === text && 
-        (new Date().getTime() - entry.timestamp.getTime()) < 5000 // Within 5 seconds
-      );
-      
-      if (isDuplicate) {
-        console.log(`⚠️ Duplicate transcript entry prevented: ${speaker}: ${text}`);
-        return prev;
-      }
-      
-      console.log(`📝 Added to transcript: ${speaker}: ${text}`);
-      return [...prev, newEntry];
-    });
-    return newEntry;
-  }, []);
+    const trimmedText = text.trim();
+    if (!trimmedText) return null;
 
-  const finalizeUserTranscript = useCallback(async () => {
-    initializeCleaner();
+    const entryKey = generateEntryKey(speaker, trimmedText);
     
-    const segments = pendingUserSegmentsRef.current;
-    const rawAccumulated = segments.map(s => s.text).join(' ');
-    
-    console.log("🔄 Finalizing user transcript with segments:", {
-      segmentCount: segments.length,
-      segments: segments,
-      rawAccumulated,
-      lastUserText: lastUserTextRef.current
-    });
-    
-    if (!rawAccumulated.trim() || rawAccumulated.trim() === '<noise>') {
-      console.log("❌ No meaningful content to finalize");
+    // Prevent duplicate entries
+    if (addedEntriesRef.current.has(entryKey)) {
+      console.log(`⚠️ Duplicate transcript entry prevented: ${speaker}: ${trimmedText}`);
       return null;
     }
 
-    let cleanedText = rawAccumulated;
+    const newEntry = { 
+      speaker, 
+      text: trimmedText, 
+      timestamp: new Date(),
+      id: generateEntryId()
+    };
+    
+    setTranscript(prev => {
+      console.log(`📝 Added to transcript: ${speaker}: ${trimmedText}`);
+      
+      // Add new entry and sort by timestamp to maintain chronological order
+      const updated = [...prev, newEntry].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      return updated;
+    });
 
-    // Use Gemini 2.0 Flash Lite for cleaning if available
-    if (cleanerRef.current) {
-      try {
-        console.log("🤖 Using Gemini cleaner for transcription");
-        cleanedText = await cleanerRef.current.cleanTranscription(
-          segments,
-          rawAccumulated,
-          'user'
-        );
-        console.log("✅ Gemini cleaned text:", cleanedText);
-      } catch (error) {
-        console.error("❌ Error using Gemini cleaner, falling back to basic cleanup:", error);
-        cleanedText = rawAccumulated.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
+    // Track this entry to prevent duplicates
+    addedEntriesRef.current.add(entryKey);
+    
+    // Clean up old entries from duplicate tracking (keep last 100)
+    if (addedEntriesRef.current.size > 100) {
+      const entriesArray = Array.from(addedEntriesRef.current);
+      addedEntriesRef.current = new Set(entriesArray.slice(-50));
+    }
+
+    return newEntry;
+  }, []);
+
+  // Process user text with AI cleaner
+  const processUserTextWithAI = useCallback(async (segments: TranscriptionSegment[], accumulated: string): Promise<string> => {
+    if (!cleanerRef.current) {
+      initializeCleaner();
+      if (!cleanerRef.current) {
+        // Fallback to basic processing
+        const combined = accumulated + " " + segments.map(s => s.text).join(" ");
+        return combined.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
       }
-    } else {
-      console.log("⚠️ No cleaner available, using basic cleanup");
-      // Basic cleanup fallback
-      cleanedText = rawAccumulated.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
     }
-    
-    if (cleanedText && cleanedText !== lastUserTextRef.current && cleanedText.length >= 2) {
-      console.log("✅ Adding finalized user transcript:", cleanedText);
-      const entry = addToTranscript("Usuário", cleanedText);
-      lastUserTextRef.current = cleanedText;
-      pendingUserSegmentsRef.current = [];
-      isUserTurnRef.current = false;
-      return entry;
-    }
-    
-    console.log("❌ Cleaned text not added (duplicate or too short):", { cleanedText, lastUserText: lastUserTextRef.current });
-    return null;
-  }, [addToTranscript, initializeCleaner]);
 
-  // Debounced user transcript processing
-  const debouncedFinalizeUser = useCallback(() => {
-    if (processingTimeoutRef.current) {
-      clearTimeout(processingTimeoutRef.current);
+    try {
+      console.log("🧠 Processing user text with AI cleaner");
+      const cleanedText = await cleanerRef.current.cleanTranscription(segments, accumulated, 'user');
+      console.log("✅ AI cleaned user text:", cleanedText);
+      return cleanedText;
+    } catch (error) {
+      console.error("❌ Error processing user text with AI:", error);
+      // Fallback to basic processing
+      const combined = accumulated + " " + segments.map(s => s.text).join(" ");
+      return combined.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
     }
-    
-    processingTimeoutRef.current = setTimeout(() => {
-      if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-        finalizeUserTranscript();
-      }
-    }, 1000); // Wait 1 second for more segments
-  }, [finalizeUserTranscript]);
+  }, [initializeCleaner]);
 
-  // Accumulate user input segments during their turn
-  const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
-    console.log("🎤 Live API user transcript received:", {
+  // Handle fragmented user transcript from Live API
+  const handleUserTranscript = useCallback(async (transcriptText: string, isFinal?: boolean) => {
+    console.log("🎤 User transcript fragment received:", {
       text: transcriptText,
       isFinal: isFinal,
-      length: transcriptText.length,
-      currentTurn: isUserTurnRef.current ? 'user' : 'none'
+      length: transcriptText.length
     });
     
     // Skip empty content or pure noise
@@ -135,121 +120,192 @@ export const useTranscriptManager = (apiKey?: string) => {
       return null;
     }
 
-    // Start user turn if not already active
-    if (!isUserTurnRef.current) {
-      console.log("🟢 Starting user turn");
-      isUserTurnRef.current = true;
-      pendingUserSegmentsRef.current = [];
-    }
-    
-    // Add segment to collection
-    pendingUserSegmentsRef.current.push({
-      text: transcriptText.trim(),
+    // Create a segment for this fragment
+    const segment: TranscriptionSegment = {
+      text: transcriptText,
       timestamp: new Date(),
-      isFinal: !!isFinal
-    });
-    
-    console.log("📥 Added segment to collection, total segments:", pendingUserSegmentsRef.current.length);
-    
-    // If this is a final segment, trigger debounced processing
-    if (isFinal) {
-      debouncedFinalizeUser();
-    }
-    
-    return null;
-  }, [debouncedFinalizeUser]);
+      isFinal: isFinal || false
+    };
 
+    // Add to pending segments
+    pendingUserSegmentsRef.current.push(segment);
+
+    // Clear existing timeout
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+    }
+
+    // If this is marked as final or we have substantial content, process immediately
+    if (isFinal || pendingUserSegmentsRef.current.length >= 3) {
+      if (!processingUserTextRef.current) {
+        processingUserTextRef.current = true;
+        
+        try {
+          // Process with AI cleaner
+          const cleanedText = await processUserTextWithAI(
+            pendingUserSegmentsRef.current,
+            userTextBufferRef.current
+          );
+
+          if (cleanedText && cleanedText.length >= 2 && cleanedText !== currentUserTextRef.current) {
+            console.log("✅ Adding processed user transcript:", cleanedText);
+            currentUserTextRef.current = cleanedText;
+            addToTranscript("Usuário", cleanedText);
+          }
+
+          // Clear processed segments and buffer
+          pendingUserSegmentsRef.current = [];
+          userTextBufferRef.current = "";
+        } catch (error) {
+          console.error("❌ Error processing user transcript:", error);
+        } finally {
+          processingUserTextRef.current = false;
+        }
+      }
+      return null;
+    }
+
+    // For non-final fragments, wait for more content or timeout
+    userTimeoutRef.current = setTimeout(async () => {
+      if (!processingUserTextRef.current && pendingUserSegmentsRef.current.length > 0) {
+        processingUserTextRef.current = true;
+        
+        try {
+          const cleanedText = await processUserTextWithAI(
+            pendingUserSegmentsRef.current,
+            userTextBufferRef.current
+          );
+
+          if (cleanedText && cleanedText.length >= 2 && cleanedText !== currentUserTextRef.current) {
+            console.log("✅ Adding timeout-processed user transcript:", cleanedText);
+            currentUserTextRef.current = cleanedText;
+            addToTranscript("Usuário", cleanedText);
+          }
+
+          // Clear processed segments and buffer
+          pendingUserSegmentsRef.current = [];
+          userTextBufferRef.current = "";
+        } catch (error) {
+          console.error("❌ Error processing user transcript on timeout:", error);
+        } finally {
+          processingUserTextRef.current = false;
+        }
+      }
+    }, 1500); // Wait 1.5 seconds for more fragments
+
+    return null;
+  }, [addToTranscript, processUserTextWithAI]);
+
+  // Handle AI transcript - add immediately
   const handleAiTranscript = useCallback((text: string) => {
     console.log("🤖 AI text received:", text);
     
-    // If we have pending user segments and AI is starting to speak, finalize user turn immediately
-    if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("🔄 AI speaking detected - finalizing pending user transcript immediately");
-      if (processingTimeoutRef.current) {
-        clearTimeout(processingTimeoutRef.current);
-        processingTimeoutRef.current = null;
+    const cleanedText = text.trim();
+    
+    if (cleanedText && cleanedText.length >= 3) {
+      // Check if this is different from what we already showed
+      if (cleanedText !== currentAiTextRef.current) {
+        console.log("✅ Adding AI transcript immediately:", cleanedText);
+        currentAiTextRef.current = cleanedText;
+        
+        return addToTranscript("Mari", cleanedText);
       }
-      finalizeUserTranscript();
     }
     
-    isAiTurnRef.current = true;
-    pendingAiTranscriptRef.current += text;
-  }, [finalizeUserTranscript]);
-
-  const handleInterruption = useCallback(async () => {
-    console.log("⚠️ Handling transcript interruption");
-    
-    // Clear any pending timeouts
-    if (processingTimeoutRef.current) {
-      clearTimeout(processingTimeoutRef.current);
-      processingTimeoutRef.current = null;
-    }
-    
-    // Finalize any pending user transcript on interruption
-    if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("🔄 Finalizing interrupted user transcript");
-      return await finalizeUserTranscript();
-    }
-    
-    return null;
-  }, [finalizeUserTranscript]);
-
-  const handleTurnComplete = useCallback(async () => {
-    console.log("🏁 Turn completed - pending segments:", pendingUserSegmentsRef.current.length, "pending AI:", pendingAiTranscriptRef.current);
-    
-    // Clear any pending timeouts
-    if (processingTimeoutRef.current) {
-      clearTimeout(processingTimeoutRef.current);
-      processingTimeoutRef.current = null;
-    }
-    
-    const results = [];
-    
-    // First finalize AI transcript if exists
-    if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("✅ Finalizing AI transcript on turn complete:", pendingAiTranscriptRef.current);
-      results.push(addToTranscript("Mari", pendingAiTranscriptRef.current.trim()));
-      pendingAiTranscriptRef.current = "";
-      isAiTurnRef.current = false;
-    }
-    
-    // Then finalize user transcript if exists
-    if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
-      console.log("🔄 Finalizing user transcript on turn complete");
-      const entry = await finalizeUserTranscript();
-      if (entry) results.push(entry);
-    }
-    
-    return results;
-  }, [addToTranscript, finalizeUserTranscript]);
-
-  const handleGenerationComplete = useCallback(() => {
-    console.log("🎯 Generation completed");
-    
-    if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("✅ Finalizing AI transcript on generation complete:", pendingAiTranscriptRef.current);
-      const entry = addToTranscript("Mari", pendingAiTranscriptRef.current.trim());
-      pendingAiTranscriptRef.current = "";
-      isAiTurnRef.current = false;
-      return entry;
-    }
     return null;
   }, [addToTranscript]);
 
-  const clearTranscripts = useCallback(() => {
-    // Clear any pending timeouts
-    if (processingTimeoutRef.current) {
-      clearTimeout(processingTimeoutRef.current);
-      processingTimeoutRef.current = null;
+  // Handle interruption - clear user buffer and processing
+  const handleInterruption = useCallback(async () => {
+    console.log("⚠️ Handling transcript interruption");
+    
+    // Clear user text buffer and timeout on interruption
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
     }
     
+    // Clear all user processing state
+    userTextBufferRef.current = "";
+    currentUserTextRef.current = "";
+    currentAiTextRef.current = "";
     pendingUserSegmentsRef.current = [];
-    pendingAiTranscriptRef.current = "";
-    lastUserTextRef.current = "";
-    isUserTurnRef.current = false;
-    isAiTurnRef.current = false;
+    processingUserTextRef.current = false;
+    
+    return null;
+  }, []);
+
+  // Handle turn completion
+  const handleTurnComplete = useCallback(async () => {
+    console.log("🏁 Turn completed");
+    
+    // Process any remaining buffered user segments
+    if (pendingUserSegmentsRef.current.length > 0 && !processingUserTextRef.current) {
+      processingUserTextRef.current = true;
+      
+      try {
+        const cleanedText = await processUserTextWithAI(
+          pendingUserSegmentsRef.current,
+          userTextBufferRef.current
+        );
+
+        if (cleanedText && cleanedText !== currentUserTextRef.current) {
+          console.log("✅ Adding remaining user text on turn complete:", cleanedText);
+          addToTranscript("Usuário", cleanedText);
+        }
+      } catch (error) {
+        console.error("❌ Error processing remaining user text:", error);
+      } finally {
+        processingUserTextRef.current = false;
+      }
+    }
+    
+    // Clear timeouts and buffers
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
+    }
+    
+    // Clear processing state
+    userTextBufferRef.current = "";
+    currentUserTextRef.current = "";
+    currentAiTextRef.current = "";
+    pendingUserSegmentsRef.current = [];
+    processingUserTextRef.current = false;
+    
+    return [];
+  }, [addToTranscript, processUserTextWithAI]);
+
+  // Handle generation completion
+  const handleGenerationComplete = useCallback(() => {
+    console.log("🎯 Generation completed");
+    currentAiTextRef.current = "";
+    return null;
+  }, []);
+
+  const clearTranscripts = useCallback(() => {
+    // Clear all timeouts
+    if (userTimeoutRef.current) {
+      clearTimeout(userTimeoutRef.current);
+      userTimeoutRef.current = null;
+    }
+    
+    // Reset all state
+    currentUserTextRef.current = "";
+    currentAiTextRef.current = "";
+    userTextBufferRef.current = "";
+    pendingUserSegmentsRef.current = [];
+    processingUserTextRef.current = false;
+    addedEntriesRef.current.clear();
     setTranscript([]);
   }, []);
+
+  // Initialize cleaner when component mounts and API key is available
+  useEffect(() => {
+    if (apiKey) {
+      initializeCleaner();
+    }
+  }, [apiKey, initializeCleaner]);
 
   return {
     transcript,
