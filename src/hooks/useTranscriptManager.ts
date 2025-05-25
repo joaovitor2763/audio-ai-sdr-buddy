@@ -1,4 +1,3 @@
-
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { TranscriptionCleaner } from '@/services/transcriptionCleaner';
 
@@ -7,7 +6,6 @@ interface TranscriptEntry {
   text: string;
   timestamp: Date;
   id: string;
-  processingId?: string; // For tracking pending entries
 }
 
 interface TranscriptionSegment {
@@ -46,7 +44,7 @@ export const useTranscriptManager = (apiKey?: string) => {
     }
   }, [apiKey]);
 
-  const addToTranscript = useCallback((speaker: string, text: string, processingId?: string) => {
+  const addToTranscript = useCallback((speaker: string, text: string) => {
     const trimmedText = text.trim();
     if (!trimmedText) return null;
 
@@ -62,21 +60,14 @@ export const useTranscriptManager = (apiKey?: string) => {
       speaker, 
       text: trimmedText, 
       timestamp: new Date(),
-      id: generateEntryId(),
-      processingId
+      id: generateEntryId()
     };
     
     setTranscript(prev => {
       console.log(`📝 Added to transcript: ${speaker}: ${trimmedText}`);
       
-      // If this is replacing a processing entry, remove the old one first
-      let filtered = prev;
-      if (processingId) {
-        filtered = prev.filter(entry => entry.processingId !== processingId);
-      }
-      
       // Add new entry and sort by timestamp to maintain chronological order
-      const updated = [...filtered, newEntry].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+      const updated = [...prev, newEntry].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
       return updated;
     });
 
@@ -200,12 +191,12 @@ export const useTranscriptManager = (apiKey?: string) => {
           processingUserTextRef.current = false;
         }
       }
-    }, 2000); // Wait 2 seconds for more fragments
+    }, 1500); // Wait 1.5 seconds for more fragments
 
     return null;
   }, [addToTranscript, processUserTextWithAI]);
 
-  // Handle AI transcript - add immediately with timestamp ordering
+  // Handle AI transcript - add immediately
   const handleAiTranscript = useCallback((text: string) => {
     console.log("🤖 AI text received:", text);
     
@@ -217,7 +208,6 @@ export const useTranscriptManager = (apiKey?: string) => {
         console.log("✅ Adding AI transcript immediately:", cleanedText);
         currentAiTextRef.current = cleanedText;
         
-        // Add with current timestamp to ensure proper ordering
         return addToTranscript("Mari", cleanedText);
       }
     }

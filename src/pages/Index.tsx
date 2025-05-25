@@ -11,10 +11,7 @@ import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
 import { useTranscriptManager } from "@/hooks/useTranscriptManager";
 import { useGeminiSession } from "@/hooks/useGeminiSession";
-import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
-import { useFullCallRecording } from "@/hooks/useFullCallRecording";
-import { usePostCallQualification } from "@/hooks/usePostCallQualification";
 
 interface QualificationLogEntry {
   timestamp: Date;
@@ -62,19 +59,6 @@ const Index = () => {
     clearTranscripts 
   } = useTranscriptManager(apiKey);
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
-  
-  const { 
-    isRecording, 
-    isProcessingTranscription,
-    startRecording, 
-    stopRecording, 
-    addAudioChunk, 
-    transcribeFullCall, 
-    resetRecording,
-    hasAudioData 
-  } = useFullCallRecording(apiKey);
-  
-  const { processFullCallQualification } = usePostCallQualification(apiKey);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -107,7 +91,7 @@ const Index = () => {
     }
   };
 
-  // Focused call end detection - prioritize Live API transcriptions
+  // Focused call end detection
   const detectCallEnd = (text: string, source: 'transcription' | 'text' = 'text'): boolean => {
     const endKeywords = [
       'vou desligar a call agora',
@@ -145,12 +129,6 @@ const Index = () => {
     return false;
   };
 
-  // Process qualification after each complete turn
-  const processQualificationAfterTurn = () => {
-    // Disabled real-time processing - we'll process after full call
-    console.log("Real-time qualification processing disabled - will process after call completion");
-  };
-
   const handleModelTurn = async (message: LiveServerMessage) => {
     console.log("Received Gemini message:", message);
 
@@ -158,7 +136,7 @@ const Index = () => {
     if (interrupted) {
       console.log("Handling interruption, stopping all audio sources");
       stopAllAudio();
-      const userEntry = await handleInterruption();
+      await handleInterruption();
     }
 
     // Handle input transcription (what the user said)
@@ -173,18 +151,18 @@ const Index = () => {
       });
       
       if (transcriptText.trim()) {
-        const userEntry = handleUserTranscript(transcriptText, true);
+        handleUserTranscript(transcriptText, true);
         
-        // Check for call end keywords in user input (less priority)
+        // Check for call end keywords in user input
         if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
           console.log("🔚 Call end detected in user input:", transcriptText);
           setCallEndProcessed(true);
-          setTimeout(() => endCallAndProcess(), 3000);
+          setTimeout(() => endCall(), 3000);
         }
       }
     }
 
-    // Handle output transcription (what Mari said) - PRIMARY call end detection
+    // Handle output transcription (what Mari said)
     if (message.serverContent?.outputTranscription) {
       const transcription = message.serverContent.outputTranscription;
       const transcriptText = transcription.text || "";
@@ -198,8 +176,7 @@ const Index = () => {
         if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
           console.log("🎯 Call end detected in Mari's Live API transcription:", transcriptText);
           setCallEndProcessed(true);
-          // Shorter delay for transcription-based detection (more reliable)
-          setTimeout(() => endCallAndProcess(), 1500);
+          setTimeout(() => endCall(), 1500);
         }
       }
     }
@@ -242,16 +219,6 @@ const Index = () => {
 
       if (part?.inlineData && part.inlineData.mimeType?.includes('audio')) {
         handleAudioMessage(part.inlineData);
-        
-        // Record AI audio for post-call transcription
-        if (isRecording && part.inlineData.data) {
-          try {
-            const audioBuffer = Uint8Array.from(atob(part.inlineData.data), c => c.charCodeAt(0)).buffer;
-            addAudioChunk(audioBuffer, 'ai');
-          } catch (error) {
-            console.error("Error recording AI audio chunk:", error);
-          }
-        }
       }
 
       // SECONDARY call end detection in text responses (fallback)
@@ -263,21 +230,21 @@ const Index = () => {
         if (!callEndProcessed && detectCallEnd(part.text, 'text')) {
           console.log("🔚 Call end detected in AI text response (fallback):", part.text);
           setCallEndProcessed(true);
-          setTimeout(() => endCallAndProcess(), 2500);
+          setTimeout(() => endCall(), 2500);
         }
       }
     }
 
-    // Handle turn completion - no longer processing qualification here
+    // Handle turn completion
     if (message.serverContent?.turnComplete) {
-      console.log("Turn complete detected - finalizing transcriptions only");
-      const entries = await handleTurnComplete();
+      console.log("Turn complete detected - finalizing transcriptions");
+      await handleTurnComplete();
     }
 
     // Handle generation completion
     if (message.serverContent?.generationComplete) {
       console.log("Generation complete detected");
-      const aiEntry = handleGenerationComplete();
+      handleGenerationComplete();
     }
   };
 
@@ -293,23 +260,21 @@ const Index = () => {
 
     try {
       setIsConnecting(true);
-      setCallEndProcessed(false); // Reset call end detection
+      setCallEndProcessed(false);
       
       await initializeAudioContext();
-      resetRecording();
       
       const session = await createSession({
         apiKey,
         onMessage: handleModelTurn,
         onOpen: () => {
           console.log('Gemini Live session opened');
-          addToTranscript("System", "Connected to Gemini Live API");
-          startRecording(); // Start full call recording
+          addToTranscript("System", "Connected to Gemini Live API - Real-time transcription active");
           addQualificationLogEntry({
             timestamp: new Date(),
             field: 'system',
             oldValue: null,
-            newValue: 'Session started - Full call recording enabled',
+            newValue: 'Session started - Real-time transcription active',
             source: 'system',
             confidence: 'high'
           });
@@ -324,19 +289,14 @@ const Index = () => {
         }
       });
 
-      // Modified audio processing to also record user audio
-      await startAudioProcessing(session, setAudioLevel, (audioData: ArrayBuffer) => {
-        if (isRecording) {
-          addAudioChunk(audioData, 'user');
-        }
-      });
+      await startAudioProcessing(session, setAudioLevel);
       
       setIsCallActive(true);
       setIsConnecting(false);
       
       toast({
         title: "Call Started",
-        description: "Mari is ready to help with your qualification. Full call recording enabled.",
+        description: "Mari is ready to help with your qualification. Real-time transcription is active.",
       });
       
     } catch (error) {
@@ -350,13 +310,9 @@ const Index = () => {
     }
   };
 
-  const endCallAndProcess = async () => {
-    console.log("🔚 Ending call and starting post-call processing");
+  const endCall = () => {
+    console.log("🔚 Ending call");
     
-    // Stop recording first
-    stopRecording();
-    
-    // Clean up audio/session
     stopAudioProcessing();
     stopAllAudio();
     resetAudio();
@@ -365,82 +321,23 @@ const Index = () => {
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
-    setCallEndProcessed(false); // Reset for next call
+    setCallEndProcessed(false);
     
-    // Clear transcript during processing
-    clearTranscripts();
-    
-    addToTranscript("System", "Call ended - Processing full call transcription and qualification...");
+    addToTranscript("System", "Call ended");
     
     addQualificationLogEntry({
       timestamp: new Date(),
       field: 'system',
       oldValue: null,
-      newValue: 'Call ended - Starting post-call processing with full audio transcription',
+      newValue: 'Call ended - Real-time transcription completed',
       source: 'system',
       confidence: 'high'
     });
 
-    // Process the full call
-    if (hasAudioData) {
-      try {
-        toast({
-          title: "Processing Call",
-          description: "Transcribing full call with speaker labels and extracting qualification data...",
-        });
-
-        console.log("🎯 Starting full call transcription with speaker labels");
-        const transcribedSegments = await transcribeFullCall();
-        
-        // Add transcribed segments to the transcript display
-        transcribedSegments.forEach(segment => {
-          addToTranscript(
-            segment.speaker === 'user' ? 'Usuário' : 'Mari',
-            segment.text
-          );
-        });
-        
-        addToTranscript("System", `Full call transcribed: ${transcribedSegments.length} segments identified`);
-        
-        console.log("📊 Starting post-call qualification processing");
-        await processFullCallQualification(
-          transcribedSegments,
-          updateQualificationData,
-          addQualificationLogEntry
-        );
-
-        toast({
-          title: "Call Processing Complete",
-          description: "Full call transcription and qualification data extraction completed successfully",
-        });
-
-        addToTranscript("System", "Post-call processing completed successfully");
-
-      } catch (error) {
-        console.error("Error in post-call processing:", error);
-        toast({
-          title: "Processing Error",
-          description: "Failed to process full call transcription. Please check console for details.",
-          variant: "destructive",
-        });
-        
-        addToTranscript("System", `Post-call processing error: ${error.message}`);
-      }
-    } else {
-      console.warn("No audio data recorded for post-call processing");
-      toast({
-        title: "No Audio Data",
-        description: "No audio was recorded during the call",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const endCall = () => {
-    if (!callEndProcessed) {
-      setCallEndProcessed(true);
-      endCallAndProcess();
-    }
+    toast({
+      title: "Call Ended",
+      description: "Call has been ended successfully",
+    });
   };
 
   const toggleMute = () => {
@@ -485,9 +382,6 @@ const Index = () => {
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Voice SDR - G4 Educação</h1>
           <p className="text-xl text-gray-600">AI-Powered Lead Qualification System</p>
-          {isProcessingTranscription && (
-            <p className="text-sm text-blue-600 mt-2">🎯 Processing full call transcription...</p>
-          )}
         </div>
 
         {!isCallActive && (
