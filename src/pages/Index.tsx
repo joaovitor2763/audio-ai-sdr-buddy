@@ -13,7 +13,7 @@ import { useGeminiSession } from "@/hooks/useGeminiSession";
 import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
 import { useFullCallRecording } from "@/hooks/useFullCallRecording";
-import { usePostCallQualification } from "@/hooks/usePostCallQualification";
+import { usePostCalllQualification } from "@/hooks/usePostCallQualification";
 
 interface QualificationLogEntry {
   timestamp: Date;

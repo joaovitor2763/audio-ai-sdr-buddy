@@ -32,7 +32,7 @@ OBJETIVO DA CALL:
 Qualificar leads interessados em cursos da G4 Educação e agendar uma reunião com um especialista.
 
 INFORMAÇÕES OBRIGATÓRIAS PARA COLETAR:
-1. Nome completo da pessoa
+1. Nome da pessoa
 2. Nome da empresa onde trabalha
 3. Como conheceu a G4 Educação (Instagram, indicação, Google, etc.)
 4. Faturamento anual aproximado da empresa
