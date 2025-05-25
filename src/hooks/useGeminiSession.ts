@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality } from '@google/genai';
 
 interface SessionConfig {
@@ -15,16 +16,8 @@ export const useGeminiSession = () => {
     const ai = new GoogleGenAI({ apiKey: config.apiKey });
     
     const session = await ai.live.connect({
-      model: 'gemini-2.0-flash-live-001',
+      model: 'gemini-2.5-flash-preview-native-audio-dialog',
       config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: 'Aoede'
-            }
-          }
-        },
         systemInstruction: {
           parts: [{
             text: `Você é Mari, uma SDR (Sales Development Representative) especialista da G4 Educação, uma empresa brasileira que oferece cursos de capacitação profissional.
@@ -75,6 +68,15 @@ IMPORTANTE:
 - Confirme informações importantes claramente
 - Use a frase de finalização exata quando completar a qualificação`
           }]
+        },
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: 'Laomedeia'
+            }
+          },
+          languageCode: 'pt-BR'
         }
       },
       callbacks: {
