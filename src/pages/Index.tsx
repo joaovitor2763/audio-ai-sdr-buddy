@@ -56,7 +56,7 @@ const Index = () => {
     handleTurnComplete, 
     handleGenerationComplete, 
     clearTranscripts 
-  } = useTranscriptManager();
+  } = useTranscriptManager(apiKey); // Pass API key for transcription cleaning
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
   const { processQualificationData, resetProcessor } = useGeminiQualificationProcessor(apiKey);
 
@@ -91,14 +91,14 @@ const Index = () => {
     }
   };
 
-  const handleModelTurn = (message: LiveServerMessage) => {
+  const handleModelTurn = async (message: LiveServerMessage) => {
     console.log("Received Gemini message:", message);
 
     const interrupted = message.serverContent?.interrupted;
     if (interrupted) {
       console.log("Handling interruption, stopping all audio sources");
       stopAllAudio();
-      const userEntry = handleInterruption();
+      const userEntry = await handleInterruption();
       if (userEntry) {
         console.log("Processing interrupted user entry for qualification");
         processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
@@ -185,7 +185,7 @@ const Index = () => {
     // Handle turn completion
     if (message.serverContent?.turnComplete) {
       console.log("Turn complete detected - finalizing transcriptions");
-      const entries = handleTurnComplete();
+      const entries = await handleTurnComplete();
       entries.forEach(entry => {
         console.log("Processing entry from turn complete for qualification");
         processQualificationData(entry, qualificationData, updateQualificationData, addQualificationLogEntry);
