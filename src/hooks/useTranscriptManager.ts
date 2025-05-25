@@ -1,3 +1,4 @@
+
 import { useRef, useCallback, useState } from 'react';
 import { TranscriptionCleaner } from '@/services/transcriptionCleaner';
 
@@ -119,7 +120,7 @@ export const useTranscriptManager = (apiKey?: string) => {
     return null;
   }, [addToTranscript, initializeCleaner]);
 
-  // Immediate user transcript processing (reduced debounce)
+  // Real-time user transcript processing with shorter debounce
   const debouncedFinalizeUser = useCallback(() => {
     if (processingTimeoutRef.current) {
       clearTimeout(processingTimeoutRef.current);
@@ -129,7 +130,7 @@ export const useTranscriptManager = (apiKey?: string) => {
       if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
         finalizeUserTranscript();
       }
-    }, 500); // Reduced from 1000ms to 500ms for faster processing
+    }, 300); // Reduced to 300ms for faster real-time display
   }, [finalizeUserTranscript]);
 
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
@@ -161,8 +162,8 @@ export const useTranscriptManager = (apiKey?: string) => {
     
     console.log("📥 Added segment to collection, total segments:", pendingUserSegmentsRef.current.length);
     
-    // If this is a final segment, trigger faster processing
-    if (isFinal) {
+    // For real-time display, process immediately if we have substantial content
+    if (transcriptText.trim().length > 5 || isFinal) {
       debouncedFinalizeUser();
     }
     
@@ -182,9 +183,15 @@ export const useTranscriptManager = (apiKey?: string) => {
       finalizeUserTranscript();
     }
     
+    // For real-time AI transcript display, add immediately instead of waiting
+    if (text.trim() && text.length > 3) {
+      console.log("✅ Adding AI transcript immediately for real-time display:", text);
+      addToTranscript("Mari", text.trim());
+    }
+    
     isAiTurnRef.current = true;
     pendingAiTranscriptRef.current += text;
-  }, [finalizeUserTranscript]);
+  }, [finalizeUserTranscript, addToTranscript]);
 
   const handleInterruption = useCallback(async () => {
     console.log("⚠️ Handling transcript interruption");
@@ -212,9 +219,8 @@ export const useTranscriptManager = (apiKey?: string) => {
     
     const results = [];
     
-    if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("✅ Finalizing AI transcript on turn complete:", pendingAiTranscriptRef.current);
-      results.push(addToTranscript("Mari", pendingAiTranscriptRef.current.trim()));
+    // Clear AI turn state since we're already showing transcripts real-time
+    if (isAiTurnRef.current) {
       pendingAiTranscriptRef.current = "";
       isAiTurnRef.current = false;
     }
@@ -226,20 +232,18 @@ export const useTranscriptManager = (apiKey?: string) => {
     }
     
     return results;
-  }, [addToTranscript, finalizeUserTranscript]);
+  }, [finalizeUserTranscript]);
 
   const handleGenerationComplete = useCallback(() => {
     console.log("🎯 Generation completed");
     
-    if (isAiTurnRef.current && pendingAiTranscriptRef.current.trim()) {
-      console.log("✅ Finalizing AI transcript on generation complete:", pendingAiTranscriptRef.current);
-      const entry = addToTranscript("Mari", pendingAiTranscriptRef.current.trim());
+    // Clear AI turn state since we're already showing transcripts real-time
+    if (isAiTurnRef.current) {
       pendingAiTranscriptRef.current = "";
       isAiTurnRef.current = false;
-      return entry;
     }
     return null;
-  }, [addToTranscript]);
+  }, []);
 
   const clearTranscripts = useCallback(() => {
     if (processingTimeoutRef.current) {
