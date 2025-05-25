@@ -13,7 +13,7 @@ import { useGeminiSession } from "@/hooks/useGeminiSession";
 import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
 import { useFullCallRecording } from "@/hooks/useFullCallRecording";
-import { usePostCalllQualification } from "@/hooks/usePostCallQualification";
+import { usePostCallQualification } from "@/hooks/usePostCallQualification";
 
 interface QualificationLogEntry {
   timestamp: Date;
@@ -105,11 +105,17 @@ const Index = () => {
     }
   };
 
-  // Detect call end keywords - updated to include Mari's specific goodbye
+  // Enhanced call end detection with more comprehensive keywords
   const detectCallEnd = (text: string): boolean => {
-    const endKeywords = ['tchau', 'obrigado', 'obrigada', 'até mais', 'falou', 'bye', 'adeus'];
+    const endKeywords = [
+      'tchau', 'tchau tchau', 'obrigado', 'obrigada', 'até mais', 'falou', 
+      'bye', 'adeus', 'até logo', 'desligar', 'encerrar', 'finalizar',
+      'vou desligar', 'finalizando', 'encerrando'
+    ];
     const specificGoodbye = 'vou desligar a call agora';
-    const lowerText = text.toLowerCase();
+    const lowerText = text.toLowerCase().trim();
+    
+    console.log("🔍 Checking call end in text:", lowerText);
     
     // Check for Mari's specific goodbye phrase (priority)
     if (lowerText.includes(specificGoodbye)) {
@@ -118,7 +124,13 @@ const Index = () => {
     }
     
     // Check for general end keywords
-    return endKeywords.some(keyword => lowerText.includes(keyword));
+    const foundKeyword = endKeywords.find(keyword => lowerText.includes(keyword));
+    if (foundKeyword) {
+      console.log("🔚 Call end keyword detected:", foundKeyword);
+      return true;
+    }
+    
+    return false;
   };
 
   // Process qualification after each complete turn
@@ -169,17 +181,13 @@ const Index = () => {
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
         
-        // Check for call end keywords in AI output - prioritize Mari's specific goodbye
+        // Check for call end keywords in AI output with enhanced detection
         if (detectCallEnd(transcriptText)) {
           console.log("🔚 Call end detected in AI output:", transcriptText);
           
-          // If it's Mari's specific goodbye, process immediately
-          if (transcriptText.toLowerCase().includes('vou desligar a call agora')) {
-            console.log("🎯 Mari's completion goodbye detected - processing full call");
-            setTimeout(() => endCallAndProcess(), 2000);
-          } else {
-            setTimeout(() => endCallAndProcess(), 3000);
-          }
+          // If it contains any goodbye, process the call
+          console.log("🎯 AI goodbye detected - processing full call");
+          setTimeout(() => endCallAndProcess(), 2000);
         }
       }
     }
@@ -235,18 +243,14 @@ const Index = () => {
       }
 
       if (part?.text) {
+        console.log("📝 AI text response received:", part.text);
         handleAiTranscript(part.text);
         
         // Also check for call end in text responses
         if (detectCallEnd(part.text)) {
           console.log("🔚 Call end detected in AI text response:", part.text);
-          
-          if (part.text.toLowerCase().includes('vou desligar a call agora')) {
-            console.log("🎯 Mari's completion goodbye detected in text - processing full call");
-            setTimeout(() => endCallAndProcess(), 2000);
-          } else {
-            setTimeout(() => endCallAndProcess(), 3000);
-          }
+          console.log("🎯 AI goodbye detected in text - processing full call");
+          setTimeout(() => endCallAndProcess(), 2000);
         }
       }
     }
