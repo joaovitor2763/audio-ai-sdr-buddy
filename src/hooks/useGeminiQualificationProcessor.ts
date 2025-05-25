@@ -99,10 +99,15 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         apiKey: apiKey,
       });
 
-      // Build structured conversation context separating user and AI responses
+      // Build structured conversation context with both user and Mari responses
       const userResponses = fullConversationRef.current
         .filter(entry => entry.speaker === "Usuário")
         .map(entry => `USUÁRIO: ${entry.text}`)
+        .join('\n');
+
+      const mariResponses = fullConversationRef.current
+        .filter(entry => entry.speaker === "Mari")
+        .map(entry => `MARI: ${entry.text}`)
         .join('\n');
 
       const fullConversation = fullConversationRef.current
@@ -110,7 +115,7 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
           if (entry.speaker === "Usuário") {
             return `USUÁRIO: ${entry.text}`;
           } else if (entry.speaker === "Mari") {
-            return `MARI (ASSISTENTE): ${entry.text}`;
+            return `MARI: ${entry.text}`;
           } else {
             return `SISTEMA: ${entry.text}`;
           }
@@ -119,48 +124,54 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
 
       console.log('=== FULL CONVERSATION CONTEXT FOR QUALIFICATION ===');
       console.log('Total conversation entries:', fullConversationRef.current.length);
-      console.log('User responses only:', userResponses);
+      console.log('User responses:', userResponses);
+      console.log('Mari responses:', mariResponses);
       console.log('Full conversation:', fullConversation);
 
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas.
+            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas completas.
 
-TAREFA: Extraia informações de qualificação APENAS das respostas do USUÁRIO na conversa completa.
+TAREFA: Extraia informações de qualificação usando AMBAS as falas do USUÁRIO e as respostas/confirmações da MARI.
 
-INSTRUÇÕES CRÍTICAS:
-1. FOQUE APENAS nas falas do "USUÁRIO" - ignore inferências das perguntas da Mari
-2. Extraia informações LITERAIS das respostas do usuário
-3. Preserve TODOS os detalhes e contexto mencionados pelo usuário
-4. Se o usuário não mencionou algo explicitamente, use: "Informação não abordada na call"
+PRIORIDADE DE FONTES:
+1. PRIMEIRA PRIORIDADE: Informações explícitas do USUÁRIO
+2. SEGUNDA PRIORIDADE: Confirmações/correções da MARI (quando o usuário não foi claro)
+3. Use Mari para validar/corrigir dados quando a transcrição do usuário parecer incorreta
+
+INSTRUÇÕES DE EXTRAÇÃO:
+- PRESERVE todos os detalhes e contexto completos mencionados
+- Se Mari corrige ou confirma algo (ex: "Obrigada, João Vítor" quando usuário disse "John Vitor"), use a versão da Mari
+- Para campos não mencionados explicitamente: "Informação não abordada na call"
+- Mantenha nuances importantes (ex: "conteúdos no Instagram" NÃO simplifique para apenas "Instagram")
 
 CAMPOS PARA EXTRAIR:
-- nome_completo: Nome completo mencionado pelo usuário
-- nome_empresa: Nome da empresa mencionado pelo usuário  
-- como_conheceu_g4: Como conheceu a G4 (preserve detalhes completos: "conteúdos no Instagram", "indicação de João Silva", etc.)
-- faturamento_anual_aproximado: Faturamento mencionado (preserve formato: "400 milhões por ano", "2 milhões anuais")
-- total_funcionarios_empresa: Número de funcionários (apenas número: "250")
-- setor_empresa: Setor de atuação mencionado
-- principal_desafio: Principal desafio mencionado pelo usuário
-- melhor_dia_contato_especialista: Preferência de dia mencionada
-- melhor_horario_contato_especialista: Preferência de horário mencionada  
-- preferencia_contato_especialista: Preferência de canal (WhatsApp/Ligação)
-- telefone: Número de telefone fornecido
+- nome_completo: Nome do lead (priorize correções da Mari se houver)
+- nome_empresa: Nome da empresa mencionada
+- como_conheceu_g4: Como conheceu a G4 (preserve detalhes completos)
+- faturamento_anual_aproximado: Faturamento mencionado (formato original)
+- total_funcionarios_empresa: Número de funcionários (apenas número)
+- setor_empresa: Setor de atuação
+- principal_desafio: Principal desafio mencionado
+- melhor_dia_contato_especialista: Preferência de dia
+- melhor_horario_contato_especialista: Preferência de horário
+- preferencia_contato_especialista: Preferência de canal
+- telefone: Número de telefone
 - analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Observações sobre a extração
+- extraction_notes: Observações sobre a extração e fontes utilizadas
 
-EXEMPLOS DE EXTRAÇÃO CORRETA:
-- Usuário diz "conteúdos no Instagram" → {"como_conheceu_g4": "conteúdos no Instagram"}
-- Usuário diz "400 milhões por ano" → {"faturamento_anual_aproximado": "400 milhões por ano"}
-- Usuário diz "250 funcionários" → {"total_funcionarios_empresa": "250"}
+EXEMPLOS DE EXTRAÇÃO INTELIGENTE:
+- Usuário: "John Vitor" → Mari: "Obrigada, João Vítor" → {"nome_completo": "João Vítor", "extraction_notes": "Nome corrigido baseado na confirmação da Mari"}
+- Usuário: "conteúdos no Instagram" → {"como_conheceu_g4": "conteúdos no Instagram"}
+- Usuário: "400 milhões por ano" → {"faturamento_anual_aproximado": "400 milhões por ano"}
 
-REGRAS:
-- Se usuário não mencionou: "Informação não abordada na call"
-- Preserve contexto e nuances das respostas do usuário
+REGRAS IMPORTANTES:
+- NÃO simplifique informações - preserve contexto completo
+- Use Mari para validar/corrigir quando necessário
 - Para funcionários, extraia apenas o número
-- NÃO faça inferências - apenas extraia o que foi dito explicitamente`
+- Seja específico nas extraction_notes sobre qual fonte foi usada`
           }
         ],
       };
@@ -174,13 +185,16 @@ REGRAS:
               text: `CONVERSA COMPLETA PARA ANÁLISE:
 ${fullConversation}
 
-RESPOSTAS DO USUÁRIO (FOQUE AQUI):
+RESPOSTAS DO USUÁRIO:
 ${userResponses}
+
+RESPOSTAS DA MARI (para confirmações/correções):
+${mariResponses}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Extraia APENAS das falas do USUÁRIO os dados de qualificação, preservando todos os detalhes mencionados:`
+Extraia dados de qualificação usando ambas as fontes (usuário prioritário, Mari para confirmações/correções):`
             },
           ],
         },
@@ -189,6 +203,7 @@ Extraia APENAS das falas do USUÁRIO os dados de qualificação, preservando tod
       console.log('=== SENDING TO GEMINI 2.5 FLASH FOR QUALIFICATION ===');
       console.log('Current data:', currentData);
       console.log('User responses length:', userResponses.length);
+      console.log('Mari responses length:', mariResponses.length);
       console.log('Full conversation length:', fullConversation.length);
 
       const response = await ai.models.generateContent({
@@ -227,9 +242,13 @@ Extraia APENAS das falas do USUÁRIO os dados de qualificação, preservando tod
             // Convert total_funcionarios_empresa to number
             let processedValue = value;
             if (key === 'total_funcionarios_empresa' && typeof value === 'string') {
-              const numValue = parseInt(value.replace(/\D/g, ''));
-              if (!isNaN(numValue)) {
-                processedValue = numValue;
+              // Extract number from strings like "250 funcionários" or "250"
+              const numMatch = value.match(/\d+/);
+              if (numMatch) {
+                const numValue = parseInt(numMatch[0]);
+                if (!isNaN(numValue)) {
+                  processedValue = numValue;
+                }
               }
             }
             
