@@ -152,49 +152,44 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
 
       const config = {
         responseMimeType: 'application/json',
+        temperature: 0.1, // Lowered for more consistent extraction
         systemInstruction: [
           {
-            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas.
+            text: `Você é um especialista em extração de dados de qualificação de leads de conversas de vendas em português brasileiro.
 
-TAREFA: Extraia informações de qualificação usando AMBAS as falas do USUÁRIO e as confirmações/correções da MARI.
+REGRA FUNDAMENTAL: EXTRAIA INFORMAÇÕES LITERALMENTE DO QUE O USUÁRIO DISSE, sem interpretação ou correção.
 
-PRIORIDADE DE FONTES:
-1. PRIMEIRA PRIORIDADE: Informações explícitas fornecidas pelo USUÁRIO
-2. SEGUNDA PRIORIDADE: Confirmações/correções da MARI quando o usuário não foi claro
-3. TERCEIRA PRIORIDADE: Inferências baseadas no contexto da conversa
+INSTRUÇÕES ESPECÍFICAS:
+1. LEIA CADA FALA DO USUÁRIO palavra por palavra
+2. EXTRAIA exatamente o que foi dito, preservando o formato original
+3. NÃO corrija erros de transcrição - use o que foi transcrito
+4. Para campos não mencionados explicitamente: "Informação não abordada na call"
 
-INSTRUÇÕES DE EXTRAÇÃO:
-- PRESERVE todos os detalhes e contexto completos mencionados pelo usuário
-- Use as confirmações da Mari para validar/corrigir quando a transcrição parecer incorreta
-- Para campos não mencionados: "Informação não abordada na call"
-- Mantenha nuances importantes e contexto específico
-
-CAMPOS PARA EXTRAIR:
-- nome_completo: Nome completo do lead
-- nome_empresa: Nome da empresa do lead
-- como_conheceu_g4: Como conheceu a G4 (preservar detalhes completos como "conteúdos no Instagram", "anúncios no Facebook", etc.)
-- faturamento_anual_aproximado: Faturamento mencionado (manter formato original como "100 milhões por ano")
+CAMPOS OBRIGATÓRIOS (extrair APENAS do que o usuário disse):
+- nome_completo: Nome que o usuário forneceu
+- nome_empresa: Nome da empresa mencionado pelo usuário
+- como_conheceu_g4: EXATAMENTE como o usuário disse que conheceu (ex: "acompanho os conteúdos no Instagram")
+- faturamento_anual_aproximado: Valor mencionado pelo usuário
 - total_funcionarios_empresa: Número de funcionários (apenas número)
-- setor_empresa: Setor/área de atuação da empresa
-- principal_desafio: Principal desafio ou problema mencionado
-- melhor_dia_contato_especialista: Dia preferido para contato
-- melhor_horario_contato_especialista: Horário preferido para contato  
-- preferencia_contato_especialista: Canal preferido (WhatsApp, telefone, email, etc.)
-- telefone: Número de telefone mencionado
+- setor_empresa: Setor mencionado pelo usuário
+- principal_desafio: Desafio mencionado nas palavras do usuário
+- melhor_dia_contato_especialista: Dia preferido mencionado
+- melhor_horario_contato_especialista: Horário mencionado
+- preferencia_contato_especialista: Canal preferido mencionado
+- telefone: Telefone fornecido
 - analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Observações sobre a extração, fontes utilizadas e contexto
+- extraction_notes: Detalhes sobre o que foi extraído de cada fala
 
-EXEMPLOS DE EXTRAÇÃO INTELIGENTE:
-- Usuário: "John Vitor" → Mari: "Obrigada, João Vítor" → {"nome_completo": "João Vítor"}
-- Usuário: "conteúdos no Instagram" → {"como_conheceu_g4": "conteúdos no Instagram"}
-- Usuário: "Empreende Brasil" → Mari: "porte da Empreende Brasil" → {"nome_empresa": "Empreende Brasil"}
-- Usuário: "100 milhões por ano" → {"faturamento_anual_aproximado": "100 milhões por ano"}
+EXEMPLOS DE EXTRAÇÃO CORRETA:
+- Usuário: "acompanho os conteúdos no Instagram" → como_conheceu_g4: "acompanho os conteúdos no Instagram"
+- Usuário: "80 funcionários" → total_funcionarios_empresa: "80"
+- Usuário: "desafio de turno ver meu time" → principal_desafio: "desafio de turno ver meu time"
 
-REGRAS IMPORTANTES:
-- NÃO simplifique informações - preserve contexto completo
-- Use Mari para validar/corrigir apenas quando necessário
-- Para funcionários, extraia apenas o número final
-- Seja específico nas extraction_notes sobre qual fonte foi utilizada`
+IMPORTANTE:
+- NÃO interprete ou "corrija" o que o usuário disse
+- NÃO use informações das falas da Mari, apenas do usuário
+- PRESERVE exatamente as palavras utilizadas pelo usuário
+- Se o usuário repetir informação, use a versão mais clara`
           }
         ],
       };
@@ -205,19 +200,28 @@ REGRAS IMPORTANTES:
           role: 'user',
           parts: [
             {
-              text: `CONVERSA COMPLETA PARA ANÁLISE (ordenada cronologicamente):
+              text: `CONVERSA PARA ANÁLISE (em ordem cronológica):
 ${chronologicalConversation}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Extraia dados de qualificação preservando contexto e nuances completas das respostas do usuário:`
+TAREFA: Extraia APENAS informações explícitas fornecidas pelo USUÁRIO. Não interprete, não corrija, extraia literalmente o que foi dito.
+
+FOQUE especialmente em:
+1. Nome que o usuário forneceu
+2. Como conheceu a G4 (extrair palavras exatas do usuário)
+3. Desafios mencionados (palavras exatas)
+4. Informações da empresa (nome, funcionários, setor)
+5. Preferências de contato
+
+Retorne JSON estruturado:`
             },
           ],
         },
       ];
 
-      console.log('=== SENDING TO GEMINI 2.5 FLASH FOR QUALIFICATION ===');
+      console.log('=== SENDING TO GEMINI FOR QUALIFICATION (Temperature: 0.1) ===');
       console.log('Current data:', currentData);
       console.log('Conversation length:', chronologicalConversation.length);
 
@@ -229,7 +233,7 @@ Extraia dados de qualificação preservando contexto e nuances completas das res
 
       const responseText = response.text || '';
       
-      console.log('=== GEMINI 2.5 FLASH QUALIFICATION RESPONSE ===');
+      console.log('=== GEMINI QUALIFICATION RESPONSE ===');
       console.log('Raw response:', responseText);
 
       try {
@@ -289,7 +293,7 @@ Extraia dados de qualificação preservando contexto e nuances completas das res
         });
 
         if (hasUpdates) {
-          console.log('Updating qualification data from Gemini 2.5 Flash:', updates);
+          console.log('Updating qualification data from Gemini:', updates);
           onDataUpdate(updates);
           
           // Log the extraction notes if available
@@ -305,11 +309,11 @@ Extraia dados de qualificação preservando contexto e nuances completas das res
             });
           }
         } else {
-          console.log('No new qualification updates from structured analysis');
+          console.log('No new qualification updates from analysis');
         }
 
       } catch (parseError) {
-        console.error('Error parsing Gemini 2.5 Flash structured response:', parseError);
+        console.error('Error parsing Gemini structured response:', parseError);
         console.error('Raw response was:', responseText);
         
         // Fallback: create log entry for processing attempt
@@ -324,7 +328,7 @@ Extraia dados de qualificação preservando contexto e nuances completas das res
       }
 
     } catch (error) {
-      console.error('Error in Gemini 2.5 Flash qualification processing:', error);
+      console.error('Error in Gemini qualification processing:', error);
       
       onLogEntry({
         timestamp: new Date(),
