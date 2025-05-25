@@ -1,3 +1,4 @@
+
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -83,9 +84,9 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Rate limiting - process at most every 3 seconds for better context accumulation
+    // Rate limiting - process at most every 2 seconds for better context accumulation
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 3000) {
+    if (now - lastProcessTimeRef.current < 2000) {
       console.log('Rate limiting qualification processing');
       return;
     }
@@ -98,68 +99,68 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         apiKey: apiKey,
       });
 
-      // Build full conversation context
-      const fullConversationText = fullConversationRef.current
-        .map(entry => `${entry.speaker}: ${entry.text}`)
+      // Build structured conversation context separating user and AI responses
+      const userResponses = fullConversationRef.current
+        .filter(entry => entry.speaker === "Usuário")
+        .map(entry => `USUÁRIO: ${entry.text}`)
         .join('\n');
 
-      console.log('=== FULL CONVERSATION CONTEXT ===');
-      console.log('Total entries:', fullConversationRef.current.length);
-      console.log('Conversation:', fullConversationText);
+      const fullConversation = fullConversationRef.current
+        .map(entry => {
+          if (entry.speaker === "Usuário") {
+            return `USUÁRIO: ${entry.text}`;
+          } else if (entry.speaker === "Mari") {
+            return `MARI (ASSISTENTE): ${entry.text}`;
+          } else {
+            return `SISTEMA: ${entry.text}`;
+          }
+        })
+        .join('\n');
+
+      console.log('=== FULL CONVERSATION CONTEXT FOR QUALIFICATION ===');
+      console.log('Total conversation entries:', fullConversationRef.current.length);
+      console.log('User responses only:', userResponses);
+      console.log('Full conversation:', fullConversation);
 
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em análise de conversas para extração de dados de qualificação de leads da G4 Educação.
+            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas.
 
-TAREFA: Analise a conversa COMPLETA entre o usuário e Mari (assistente da G4) e extraia informações de qualificação preservando contexto e nuances.
+TAREFA: Extraia informações de qualificação APENAS das respostas do USUÁRIO na conversa completa.
 
-IMPORTANTE: 
-- Analise TODA a conversa desde o início
-- Preserve contexto e nuances nas respostas
-- Se uma informação não foi mencionada na conversa, use: "Informação não abordada na call"
-- Mantenha detalhes importantes (ex: "Instagram - conteúdos orgânicos" vs "Instagram - anúncios")
-- Para números, extraia apenas o valor numérico quando possível
+INSTRUÇÕES CRÍTICAS:
+1. FOQUE APENAS nas falas do "USUÁRIO" - ignore inferências das perguntas da Mari
+2. Extraia informações LITERAIS das respostas do usuário
+3. Preserve TODOS os detalhes e contexto mencionados pelo usuário
+4. Se o usuário não mencionou algo explicitamente, use: "Informação não abordada na call"
 
 CAMPOS PARA EXTRAIR:
-- nome_completo: Nome completo da pessoa
-- nome_empresa: Nome da empresa/organização
-- como_conheceu_g4: Como conheceu a G4 (preserve detalhes: "Instagram através de conteúdos", "LinkedIn", "indicação de João", etc.)
-- faturamento_anual_aproximado: Faturamento anual (preserve formato mencionado)
-- total_funcionarios_empresa: Número de funcionários (apenas número, ex: "50")
-- setor_empresa: Setor de atuação da empresa
-- principal_desafio: Principal desafio mencionado
-- melhor_dia_contato_especialista: Melhor dia para contato
-- melhor_horario_contato_especialista: Melhor horário para contato
-- preferencia_contato_especialista: Preferência de contato (WhatsApp/Ligação)
-- telefone: Número de telefone (apenas números)
-- analysis_confidence: "alta", "média" ou "baixa" - sua confiança na extração
-- extraction_notes: Observações sobre o contexto ou incertezas
+- nome_completo: Nome completo mencionado pelo usuário
+- nome_empresa: Nome da empresa mencionado pelo usuário  
+- como_conheceu_g4: Como conheceu a G4 (preserve detalhes completos: "conteúdos no Instagram", "indicação de João Silva", etc.)
+- faturamento_anual_aproximado: Faturamento mencionado (preserve formato: "400 milhões por ano", "2 milhões anuais")
+- total_funcionarios_empresa: Número de funcionários (apenas número: "250")
+- setor_empresa: Setor de atuação mencionado
+- principal_desafio: Principal desafio mencionado pelo usuário
+- melhor_dia_contato_especialista: Preferência de dia mencionada
+- melhor_horario_contato_especialista: Preferência de horário mencionada  
+- preferencia_contato_especialista: Preferência de canal (WhatsApp/Ligação)
+- telefone: Número de telefone fornecido
+- analysis_confidence: "alta", "média" ou "baixa"
+- extraction_notes: Observações sobre a extração
 
-REGRAS DE EXTRAÇÃO:
-1. Se informação não foi mencionada: "Informação não abordada na call"
-2. Preserve contexto e detalhes nas respostas
-3. Para funcionários, extraia apenas o número (ex: 250, não "250 funcionários")
-4. Mantenha nuances (ex: "Instagram - conteúdos educacionais" vs apenas "Instagram")
-5. Se múltiplas informações sobre o mesmo campo, use a mais recente ou completa
+EXEMPLOS DE EXTRAÇÃO CORRETA:
+- Usuário diz "conteúdos no Instagram" → {"como_conheceu_g4": "conteúdos no Instagram"}
+- Usuário diz "400 milhões por ano" → {"faturamento_anual_aproximado": "400 milhões por ano"}
+- Usuário diz "250 funcionários" → {"total_funcionarios_empresa": "250"}
 
-EXEMPLO DE SAÍDA:
-{
-  "nome_completo": "João Vítor Silva",
-  "nome_empresa": "G4 Educação",
-  "como_conheceu_g4": "Instagram através de conteúdos sobre educação",
-  "faturamento_anual_aproximado": "Informação não abordada na call",
-  "total_funcionarios_empresa": "250",
-  "setor_empresa": "educação",
-  "principal_desafio": "captação e retenção de alunos",
-  "melhor_dia_contato_especialista": "Informação não abordada na call",
-  "melhor_horario_contato_especialista": "Informação não abordada na call",
-  "preferencia_contato_especialista": "Informação não abordada na call",
-  "telefone": "Informação não abordada na call",
-  "analysis_confidence": "alta",
-  "extraction_notes": "Nome e empresa claramente mencionados, contexto do Instagram bem definido"
-}`
+REGRAS:
+- Se usuário não mencionou: "Informação não abordada na call"
+- Preserve contexto e nuances das respostas do usuário
+- Para funcionários, extraia apenas o número
+- NÃO faça inferências - apenas extraia o que foi dito explicitamente`
           }
         ],
       };
@@ -171,12 +172,15 @@ EXEMPLO DE SAÍDA:
           parts: [
             {
               text: `CONVERSA COMPLETA PARA ANÁLISE:
-${fullConversationText}
+${fullConversation}
+
+RESPOSTAS DO USUÁRIO (FOQUE AQUI):
+${userResponses}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Analise esta conversa completa e extraia TODOS os dados de qualificação mencionados, preservando contexto e nuances:`
+Extraia APENAS das falas do USUÁRIO os dados de qualificação, preservando todos os detalhes mencionados:`
             },
           ],
         },
@@ -184,7 +188,8 @@ Analise esta conversa completa e extraia TODOS os dados de qualificação mencio
 
       console.log('=== SENDING TO GEMINI 2.5 FLASH FOR QUALIFICATION ===');
       console.log('Current data:', currentData);
-      console.log('Full conversation length:', fullConversationText.length);
+      console.log('User responses length:', userResponses.length);
+      console.log('Full conversation length:', fullConversation.length);
 
       const response = await ai.models.generateContent({
         model,
@@ -222,7 +227,7 @@ Analise esta conversa completa e extraia TODOS os dados de qualificação mencio
             // Convert total_funcionarios_empresa to number
             let processedValue = value;
             if (key === 'total_funcionarios_empresa' && typeof value === 'string') {
-              const numValue = parseInt(value);
+              const numValue = parseInt(value.replace(/\D/g, ''));
               if (!isNaN(numValue)) {
                 processedValue = numValue;
               }
