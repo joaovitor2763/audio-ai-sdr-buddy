@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -11,6 +10,7 @@ import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
 import { useTranscriptManager } from "@/hooks/useTranscriptManager";
 import { useGeminiSession } from "@/hooks/useGeminiSession";
+import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
 
 interface QualificationLogEntry {
@@ -43,7 +43,6 @@ const Index = () => {
   const [qualificationLog, setQualificationLog] = useState<QualificationLogEntry[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
-  const [callEndProcessed, setCallEndProcessed] = useState(false);
   
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
@@ -57,8 +56,9 @@ const Index = () => {
     handleTurnComplete, 
     handleGenerationComplete, 
     clearTranscripts 
-  } = useTranscriptManager(apiKey);
+  } = useTranscriptManager(apiKey); // Pass API key for transcription cleaning
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
+  const { processQualificationData, resetProcessor } = useGeminiQualificationProcessor(apiKey);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -91,44 +91,6 @@ const Index = () => {
     }
   };
 
-  // Focused call end detection
-  const detectCallEnd = (text: string, source: 'transcription' | 'text' = 'text'): boolean => {
-    const endKeywords = [
-      'vou desligar a call agora',
-      'tchau tchau',
-      'tchau',
-      'obrigado',
-      'obrigada',
-      'até mais',
-      'falou',
-      'bye',
-      'adeus',
-      'até logo',
-      'desligar',
-      'encerrar',
-      'finalizar'
-    ];
-    
-    const lowerText = text.toLowerCase().trim();
-    
-    console.log(`🔍 Checking call end in ${source}:`, lowerText);
-    
-    // Prioritize the specific goodbye phrase
-    if (lowerText.includes('vou desligar a call agora')) {
-      console.log("🎯 Mari's specific goodbye detected - high priority");
-      return true;
-    }
-    
-    // Check for other end keywords
-    const foundKeyword = endKeywords.find(keyword => lowerText.includes(keyword));
-    if (foundKeyword) {
-      console.log(`🔚 Call end keyword detected in ${source}:`, foundKeyword);
-      return true;
-    }
-    
-    return false;
-  };
-
   const handleModelTurn = async (message: LiveServerMessage) => {
     console.log("Received Gemini message:", message);
 
@@ -136,7 +98,11 @@ const Index = () => {
     if (interrupted) {
       console.log("Handling interruption, stopping all audio sources");
       stopAllAudio();
-      await handleInterruption();
+      const userEntry = await handleInterruption();
+      if (userEntry) {
+        console.log("Processing interrupted user entry for qualification");
+        processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
+      }
     }
 
     // Handle input transcription (what the user said)
@@ -151,13 +117,10 @@ const Index = () => {
       });
       
       if (transcriptText.trim()) {
-        handleUserTranscript(transcriptText, true);
-        
-        // Check for call end keywords in user input
-        if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
-          console.log("🔚 Call end detected in user input:", transcriptText);
-          setCallEndProcessed(true);
-          setTimeout(() => endCall(), 3000);
+        const userEntry = handleUserTranscript(transcriptText, true);
+        if (userEntry) {
+          console.log("Processing finalized user transcript for qualification:", userEntry);
+          processQualificationData(userEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
         }
       }
     }
@@ -167,17 +130,10 @@ const Index = () => {
       const transcription = message.serverContent.outputTranscription;
       const transcriptText = transcription.text || "";
       
-      console.log("🎤 Mari's Live API transcription received:", transcriptText);
+      console.log("Output transcription received:", transcriptText);
       
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
-        
-        // PRIMARY call end detection - what Mari actually said
-        if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
-          console.log("🎯 Call end detected in Mari's Live API transcription:", transcriptText);
-          setCallEndProcessed(true);
-          setTimeout(() => endCall(), 1500);
-        }
       }
     }
 
@@ -221,30 +177,29 @@ const Index = () => {
         handleAudioMessage(part.inlineData);
       }
 
-      // SECONDARY call end detection in text responses (fallback)
       if (part?.text) {
-        console.log("📝 AI text response received:", part.text);
         handleAiTranscript(part.text);
-        
-        // Only check text if transcription hasn't already triggered
-        if (!callEndProcessed && detectCallEnd(part.text, 'text')) {
-          console.log("🔚 Call end detected in AI text response (fallback):", part.text);
-          setCallEndProcessed(true);
-          setTimeout(() => endCall(), 2500);
-        }
       }
     }
 
     // Handle turn completion
     if (message.serverContent?.turnComplete) {
       console.log("Turn complete detected - finalizing transcriptions");
-      await handleTurnComplete();
+      const entries = await handleTurnComplete();
+      entries.forEach(entry => {
+        console.log("Processing entry from turn complete for qualification");
+        processQualificationData(entry, qualificationData, updateQualificationData, addQualificationLogEntry);
+      });
     }
 
     // Handle generation completion
     if (message.serverContent?.generationComplete) {
       console.log("Generation complete detected");
-      handleGenerationComplete();
+      const aiEntry = handleGenerationComplete();
+      if (aiEntry) {
+        console.log("Processing AI entry from generation complete for qualification");
+        processQualificationData(aiEntry, qualificationData, updateQualificationData, addQualificationLogEntry);
+      }
     }
   };
 
@@ -260,21 +215,21 @@ const Index = () => {
 
     try {
       setIsConnecting(true);
-      setCallEndProcessed(false);
       
       await initializeAudioContext();
+      resetProcessor();
       
       const session = await createSession({
         apiKey,
         onMessage: handleModelTurn,
         onOpen: () => {
           console.log('Gemini Live session opened');
-          addToTranscript("System", "Connected to Gemini Live API - Real-time transcription active");
+          addToTranscript("System", "Connected to Gemini Live API");
           addQualificationLogEntry({
             timestamp: new Date(),
             field: 'system',
             oldValue: null,
-            newValue: 'Session started - Real-time transcription active',
+            newValue: 'Session started',
             source: 'system',
             confidence: 'high'
           });
@@ -296,7 +251,7 @@ const Index = () => {
       
       toast({
         title: "Call Started",
-        description: "Mari is ready to help with your qualification. Real-time transcription is active.",
+        description: "Mari is ready to help with your qualification",
       });
       
     } catch (error) {
@@ -311,32 +266,29 @@ const Index = () => {
   };
 
   const endCall = () => {
-    console.log("🔚 Ending call");
-    
+    clearTranscripts();
     stopAudioProcessing();
     stopAllAudio();
     resetAudio();
+    resetProcessor();
     closeSession();
 
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
-    setCallEndProcessed(false);
-    
-    addToTranscript("System", "Call ended");
     
     addQualificationLogEntry({
       timestamp: new Date(),
       field: 'system',
       oldValue: null,
-      newValue: 'Call ended - Real-time transcription completed',
+      newValue: 'Session ended',
       source: 'system',
       confidence: 'high'
     });
-
+    
     toast({
       title: "Call Ended",
-      description: "Call has been ended successfully",
+      description: "Thank you for the qualification call",
     });
   };
 

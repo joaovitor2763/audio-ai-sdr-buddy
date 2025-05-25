@@ -7,17 +7,14 @@ export const useAudioProcessor = () => {
   const audioWorkletRef = useRef<AudioWorkletNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   
-  const startAudioProcessing = useCallback(async (
-    session: Session, 
-    onAudioLevel: (level: number) => void,
-    onUserAudioChunk?: (audioData: ArrayBuffer) => void
-  ) => {
+  const startAudioProcessing = useCallback(async (session: Session, onAudioLevel: (level: number) => void) => {
     try {
       // Request microphone access with Live API specifications
+      // Input audio is natively 16kHz according to docs, but API will resample if needed
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: 16000,
-          channelCount: 1,
+          sampleRate: 16000, // Native sample rate for Live API input
+          channelCount: 1,   // Mono as required
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true
@@ -49,20 +46,15 @@ export const useAudioProcessor = () => {
             const uint8Array = new Uint8Array(pcmBuffer);
             const base64Data = btoa(String.fromCharCode(...uint8Array));
             
-            // Send to Gemini Live API
+            // Send to Gemini Live API with proper MIME type for 16kHz PCM
             await session.sendRealtimeInput({
               audio: {
                 data: base64Data,
-                mimeType: 'audio/pcm;rate=16000'
+                mimeType: 'audio/pcm;rate=16000' // Proper MIME type as per docs
               }
             });
             
-            // Record user audio chunk for post-call processing
-            if (onUserAudioChunk) {
-              onUserAudioChunk(pcmBuffer.slice()); // Create a copy
-            }
-            
-            // Calculate audio level for visualization
+            // Calculate audio level for visualization (RMS)
             const floatArray = new Float32Array(pcmBuffer);
             const rms = Math.sqrt(floatArray.reduce((sum, sample) => sum + sample * sample, 0) / floatArray.length);
             onAudioLevel(rms * 100);
