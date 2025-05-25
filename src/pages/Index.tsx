@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -45,6 +46,7 @@ const Index = () => {
   const [qualificationLog, setQualificationLog] = useState<QualificationLogEntry[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
+  const [callEndProcessed, setCallEndProcessed] = useState(false);
   
   const { toast } = useToast();
   const { startAudioProcessing, stopAudioProcessing, toggleMute: toggleAudioMute } = useAudioProcessor();
@@ -105,28 +107,38 @@ const Index = () => {
     }
   };
 
-  // Enhanced call end detection with more comprehensive keywords
-  const detectCallEnd = (text: string): boolean => {
+  // Focused call end detection - prioritize Live API transcriptions
+  const detectCallEnd = (text: string, source: 'transcription' | 'text' = 'text'): boolean => {
     const endKeywords = [
-      'tchau', 'tchau tchau', 'obrigado', 'obrigada', 'até mais', 'falou', 
-      'bye', 'adeus', 'até logo', 'desligar', 'encerrar', 'finalizar',
-      'vou desligar', 'finalizando', 'encerrando'
+      'vou desligar a call agora',
+      'tchau tchau',
+      'tchau',
+      'obrigado',
+      'obrigada',
+      'até mais',
+      'falou',
+      'bye',
+      'adeus',
+      'até logo',
+      'desligar',
+      'encerrar',
+      'finalizar'
     ];
-    const specificGoodbye = 'vou desligar a call agora';
+    
     const lowerText = text.toLowerCase().trim();
     
-    console.log("🔍 Checking call end in text:", lowerText);
+    console.log(`🔍 Checking call end in ${source}:`, lowerText);
     
-    // Check for Mari's specific goodbye phrase (priority)
-    if (lowerText.includes(specificGoodbye)) {
-      console.log("🎯 Mari's specific goodbye detected - call completion confirmed");
+    // Prioritize the specific goodbye phrase
+    if (lowerText.includes('vou desligar a call agora')) {
+      console.log("🎯 Mari's specific goodbye detected - high priority");
       return true;
     }
     
-    // Check for general end keywords
+    // Check for other end keywords
     const foundKeyword = endKeywords.find(keyword => lowerText.includes(keyword));
     if (foundKeyword) {
-      console.log("🔚 Call end keyword detected:", foundKeyword);
+      console.log(`🔚 Call end keyword detected in ${source}:`, foundKeyword);
       return true;
     }
     
@@ -163,31 +175,31 @@ const Index = () => {
       if (transcriptText.trim()) {
         const userEntry = handleUserTranscript(transcriptText, true);
         
-        // Check for call end keywords in user input
-        if (detectCallEnd(transcriptText)) {
+        // Check for call end keywords in user input (less priority)
+        if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
           console.log("🔚 Call end detected in user input:", transcriptText);
-          setTimeout(() => endCallAndProcess(), 3000); // Give 3 seconds for final responses
+          setCallEndProcessed(true);
+          setTimeout(() => endCallAndProcess(), 3000);
         }
       }
     }
 
-    // Handle output transcription (what Mari said)
+    // Handle output transcription (what Mari said) - PRIMARY call end detection
     if (message.serverContent?.outputTranscription) {
       const transcription = message.serverContent.outputTranscription;
       const transcriptText = transcription.text || "";
       
-      console.log("Output transcription received:", transcriptText);
+      console.log("🎤 Mari's Live API transcription received:", transcriptText);
       
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
         
-        // Check for call end keywords in AI output with enhanced detection
-        if (detectCallEnd(transcriptText)) {
-          console.log("🔚 Call end detected in AI output:", transcriptText);
-          
-          // If it contains any goodbye, process the call
-          console.log("🎯 AI goodbye detected - processing full call");
-          setTimeout(() => endCallAndProcess(), 2000);
+        // PRIMARY call end detection - what Mari actually said
+        if (!callEndProcessed && detectCallEnd(transcriptText, 'transcription')) {
+          console.log("🎯 Call end detected in Mari's Live API transcription:", transcriptText);
+          setCallEndProcessed(true);
+          // Shorter delay for transcription-based detection (more reliable)
+          setTimeout(() => endCallAndProcess(), 1500);
         }
       }
     }
@@ -242,15 +254,16 @@ const Index = () => {
         }
       }
 
+      // SECONDARY call end detection in text responses (fallback)
       if (part?.text) {
         console.log("📝 AI text response received:", part.text);
         handleAiTranscript(part.text);
         
-        // Also check for call end in text responses
-        if (detectCallEnd(part.text)) {
-          console.log("🔚 Call end detected in AI text response:", part.text);
-          console.log("🎯 AI goodbye detected in text - processing full call");
-          setTimeout(() => endCallAndProcess(), 2000);
+        // Only check text if transcription hasn't already triggered
+        if (!callEndProcessed && detectCallEnd(part.text, 'text')) {
+          console.log("🔚 Call end detected in AI text response (fallback):", part.text);
+          setCallEndProcessed(true);
+          setTimeout(() => endCallAndProcess(), 2500);
         }
       }
     }
@@ -280,6 +293,7 @@ const Index = () => {
 
     try {
       setIsConnecting(true);
+      setCallEndProcessed(false); // Reset call end detection
       
       await initializeAudioContext();
       resetRecording();
@@ -351,6 +365,7 @@ const Index = () => {
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
+    setCallEndProcessed(false); // Reset for next call
     
     // Clear transcript during processing
     clearTranscripts();
@@ -422,7 +437,10 @@ const Index = () => {
   };
 
   const endCall = () => {
-    endCallAndProcess();
+    if (!callEndProcessed) {
+      setCallEndProcessed(true);
+      endCallAndProcess();
+    }
   };
 
   const toggleMute = () => {
