@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import CallSetup from "@/components/CallSetup";
@@ -13,6 +12,8 @@ import { useTranscriptManager } from "@/hooks/useTranscriptManager";
 import { useGeminiSession } from "@/hooks/useGeminiSession";
 import { useGeminiQualificationProcessor } from "@/hooks/useGeminiQualificationProcessor";
 import { triggerWebhook } from "@/utils/webhookUtils";
+import { useFullCallRecording } from "@/hooks/useFullCallRecording";
+import { usePostCallQualification } from "@/hooks/usePostCallQualification";
 
 interface QualificationLogEntry {
   timestamp: Date;
@@ -59,7 +60,19 @@ const Index = () => {
     clearTranscripts 
   } = useTranscriptManager(apiKey);
   const { createSession, closeSession, sendToolResponse } = useGeminiSession();
-  const { processTranscriptForQualification, resetProcessor } = useGeminiQualificationProcessor(apiKey);
+  
+  const { 
+    isRecording, 
+    isProcessingTranscription,
+    startRecording, 
+    stopRecording, 
+    addAudioChunk, 
+    transcribeFullCall, 
+    resetRecording,
+    hasAudioData 
+  } = useFullCallRecording(apiKey);
+  
+  const { processFullCallQualification } = usePostCallQualification(apiKey);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -92,12 +105,17 @@ const Index = () => {
     }
   };
 
+  // Detect call end keywords
+  const detectCallEnd = (text: string): boolean => {
+    const endKeywords = ['tchau', 'obrigado', 'obrigada', 'até mais', 'falou', 'bye', 'adeus'];
+    const lowerText = text.toLowerCase();
+    return endKeywords.some(keyword => lowerText.includes(keyword));
+  };
+
   // Process qualification after each complete turn
   const processQualificationAfterTurn = () => {
-    console.log("Processing qualification after complete turn");
-    setTimeout(() => {
-      processTranscriptForQualification(transcript, qualificationData, updateQualificationData, addQualificationLogEntry);
-    }, 1000); // 1 second delay to ensure transcript is finalized
+    // Disabled real-time processing - we'll process after full call
+    console.log("Real-time qualification processing disabled - will process after call completion");
   };
 
   const handleModelTurn = async (message: LiveServerMessage) => {
@@ -108,10 +126,7 @@ const Index = () => {
       console.log("Handling interruption, stopping all audio sources");
       stopAllAudio();
       const userEntry = await handleInterruption();
-      if (userEntry) {
-        console.log("User interruption processed, will process qualification");
-        processQualificationAfterTurn();
-      }
+      // No longer processing qualification in real-time
     }
 
     // Handle input transcription (what the user said)
@@ -127,8 +142,11 @@ const Index = () => {
       
       if (transcriptText.trim()) {
         const userEntry = handleUserTranscript(transcriptText, true);
-        if (userEntry) {
-          console.log("User transcript finalized");
+        
+        // Check for call end keywords in user input
+        if (detectCallEnd(transcriptText)) {
+          console.log("🔚 Call end detected in user input:", transcriptText);
+          setTimeout(() => endCallAndProcess(), 2000); // Give 2 seconds for any final responses
         }
       }
     }
@@ -142,6 +160,12 @@ const Index = () => {
       
       if (transcriptText.trim()) {
         handleAiTranscript(transcriptText);
+        
+        // Check for call end keywords in AI output
+        if (detectCallEnd(transcriptText)) {
+          console.log("🔚 Call end detected in AI output:", transcriptText);
+          setTimeout(() => endCallAndProcess(), 2000);
+        }
       }
     }
 
@@ -183,6 +207,16 @@ const Index = () => {
 
       if (part?.inlineData && part.inlineData.mimeType?.includes('audio')) {
         handleAudioMessage(part.inlineData);
+        
+        // Record AI audio for post-call transcription
+        if (isRecording && part.inlineData.data) {
+          try {
+            const audioBuffer = Uint8Array.from(atob(part.inlineData.data), c => c.charCodeAt(0)).buffer;
+            addAudioChunk(audioBuffer, 'ai');
+          } catch (error) {
+            console.error("Error recording AI audio chunk:", error);
+          }
+        }
       }
 
       if (part?.text) {
@@ -190,22 +224,16 @@ const Index = () => {
       }
     }
 
-    // Handle turn completion - PROCESS QUALIFICATION AFTER EACH COMPLETE TURN
+    // Handle turn completion - no longer processing qualification here
     if (message.serverContent?.turnComplete) {
-      console.log("Turn complete detected - finalizing transcriptions and processing qualification");
+      console.log("Turn complete detected - finalizing transcriptions only");
       const entries = await handleTurnComplete();
-      
-      // Process qualification after each complete turn
-      processQualificationAfterTurn();
     }
 
     // Handle generation completion
     if (message.serverContent?.generationComplete) {
       console.log("Generation complete detected");
       const aiEntry = handleGenerationComplete();
-      
-      // Also process qualification after generation complete
-      processQualificationAfterTurn();
     }
   };
 
@@ -223,7 +251,7 @@ const Index = () => {
       setIsConnecting(true);
       
       await initializeAudioContext();
-      resetProcessor();
+      resetRecording();
       
       const session = await createSession({
         apiKey,
@@ -231,11 +259,12 @@ const Index = () => {
         onOpen: () => {
           console.log('Gemini Live session opened');
           addToTranscript("System", "Connected to Gemini Live API");
+          startRecording(); // Start full call recording
           addQualificationLogEntry({
             timestamp: new Date(),
             field: 'system',
             oldValue: null,
-            newValue: 'Session started',
+            newValue: 'Session started - Full call recording enabled',
             source: 'system',
             confidence: 'high'
           });
@@ -250,14 +279,19 @@ const Index = () => {
         }
       });
 
-      await startAudioProcessing(session, setAudioLevel);
+      // Modified audio processing to also record user audio
+      await startAudioProcessing(session, setAudioLevel, (audioData: ArrayBuffer) => {
+        if (isRecording) {
+          addAudioChunk(audioData, 'user');
+        }
+      });
       
       setIsCallActive(true);
       setIsConnecting(false);
       
       toast({
         title: "Call Started",
-        description: "Mari is ready to help with your qualification",
+        description: "Mari is ready to help with your qualification. Full call recording enabled.",
       });
       
     } catch (error) {
@@ -271,31 +305,82 @@ const Index = () => {
     }
   };
 
-  const endCall = () => {
-    clearTranscripts();
+  const endCallAndProcess = async () => {
+    console.log("🔚 Ending call and starting post-call processing");
+    
+    // Stop recording first
+    stopRecording();
+    
+    // Clean up audio/session
     stopAudioProcessing();
     stopAllAudio();
     resetAudio();
-    resetProcessor();
     closeSession();
 
     setIsCallActive(false);
     setIsMuted(false);
     setAudioLevel(0);
     
+    addToTranscript("System", "Call ended - Processing full call transcription and qualification...");
+    
     addQualificationLogEntry({
       timestamp: new Date(),
       field: 'system',
       oldValue: null,
-      newValue: 'Session ended',
+      newValue: 'Call ended - Starting post-call processing',
       source: 'system',
       confidence: 'high'
     });
-    
-    toast({
-      title: "Call Ended",
-      description: "Thank you for the qualification call",
-    });
+
+    // Process the full call
+    if (hasAudioData) {
+      try {
+        toast({
+          title: "Processing Call",
+          description: "Transcribing full call and extracting qualification data...",
+        });
+
+        console.log("🎯 Starting full call transcription");
+        const transcribedSegments = await transcribeFullCall();
+        
+        addToTranscript("System", `Full call transcribed: ${transcribedSegments.length} segments identified`);
+        
+        console.log("📊 Starting post-call qualification processing");
+        await processFullCallQualification(
+          transcribedSegments,
+          updateQualificationData,
+          addQualificationLogEntry
+        );
+
+        toast({
+          title: "Call Processing Complete",
+          description: "Full call transcription and qualification data extraction completed successfully",
+        });
+
+        addToTranscript("System", "Post-call processing completed successfully");
+
+      } catch (error) {
+        console.error("Error in post-call processing:", error);
+        toast({
+          title: "Processing Error",
+          description: "Failed to process full call transcription. Using real-time data.",
+          variant: "destructive",
+        });
+        
+        addToTranscript("System", `Post-call processing error: ${error.message}`);
+      }
+    } else {
+      console.warn("No audio data recorded for post-call processing");
+      toast({
+        title: "No Audio Data",
+        description: "No audio was recorded during the call",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const endCall = () => {
+    endCallAndProcess();
   };
 
   const toggleMute = () => {
@@ -340,6 +425,9 @@ const Index = () => {
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Voice SDR - G4 Educação</h1>
           <p className="text-xl text-gray-600">AI-Powered Lead Qualification System</p>
+          {isProcessingTranscription && (
+            <p className="text-sm text-blue-600 mt-2">🎯 Processing full call transcription...</p>
+          )}
         </div>
 
         {!isCallActive && (
