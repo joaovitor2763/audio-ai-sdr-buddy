@@ -16,9 +16,11 @@ export const useTranscriptManager = () => {
   const isAiTurnRef = useRef(false);
   const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastUserTextRef = useRef<string>("");
+  const accumulatedUserTextRef = useRef<string>("");
 
-  // Increased delay for better sentence completion
-  const TRANSCRIPT_FINALIZATION_DELAY = 2000;
+  // Longer delay to wait for complete sentences
+  const TRANSCRIPT_FINALIZATION_DELAY = 3000;
+  const MIN_TEXT_LENGTH_FOR_FINALIZATION = 3;
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
@@ -28,10 +30,13 @@ export const useTranscriptManager = () => {
   }, []);
 
   const finalizeUserTranscript = useCallback(() => {
-    if (pendingUserTranscriptRef.current.trim() && pendingUserTranscriptRef.current !== lastUserTextRef.current) {
-      console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
-      const entry = addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
-      lastUserTextRef.current = pendingUserTranscriptRef.current;
+    const textToFinalize = accumulatedUserTextRef.current.trim();
+    
+    if (textToFinalize && textToFinalize !== lastUserTextRef.current && textToFinalize.length >= MIN_TEXT_LENGTH_FOR_FINALIZATION) {
+      console.log("Finalizing accumulated user transcript:", textToFinalize);
+      const entry = addToTranscript("Usuário", textToFinalize);
+      lastUserTextRef.current = textToFinalize;
+      accumulatedUserTextRef.current = "";
       pendingUserTranscriptRef.current = "";
       isUserTurnRef.current = false;
       return entry;
@@ -40,21 +45,33 @@ export const useTranscriptManager = () => {
   }, [addToTranscript]);
 
   const handleUserTranscript = useCallback((transcriptText: string, isPartial?: boolean) => {
-    console.log("User transcript received:", {
+    console.log("User transcript fragment received:", {
       text: transcriptText,
       isPartial: isPartial,
       length: transcriptText.length,
-      isDifferent: transcriptText !== lastUserTextRef.current
+      currentAccumulated: accumulatedUserTextRef.current
     });
     
-    // Skip if text hasn't changed meaningfully
-    if (!transcriptText.trim() || transcriptText === lastUserTextRef.current) {
+    // Skip empty or very short meaningless fragments
+    if (!transcriptText.trim() || transcriptText.trim().length < 1) {
       return null;
     }
 
-    // For input transcriptions from Live API, we get continuous updates
-    // We'll accumulate the text and finalize it after a delay
-    pendingUserTranscriptRef.current = transcriptText;
+    // For Live API, we get individual word/phrase fragments
+    // We need to accumulate them into complete sentences
+    const trimmedText = transcriptText.trim();
+    
+    // Add this fragment to our accumulated text
+    if (accumulatedUserTextRef.current) {
+      // Check if this fragment should be concatenated with a space or not
+      const needsSpace = !accumulatedUserTextRef.current.endsWith(' ') && !trimmedText.startsWith(' ');
+      accumulatedUserTextRef.current += (needsSpace ? ' ' : '') + trimmedText;
+    } else {
+      accumulatedUserTextRef.current = trimmedText;
+    }
+    
+    console.log("Accumulated user text now:", accumulatedUserTextRef.current);
+    
     isUserTurnRef.current = true;
     
     // Clear any existing timeout
@@ -63,10 +80,10 @@ export const useTranscriptManager = () => {
     }
     
     // Set timeout to finalize transcript after user stops speaking
-    // Only if we have substantial content
-    if (transcriptText.trim().length > 5) {
+    // Only if we have meaningful accumulated content
+    if (accumulatedUserTextRef.current.trim().length >= MIN_TEXT_LENGTH_FOR_FINALIZATION) {
       userTranscriptTimeoutRef.current = setTimeout(() => {
-        console.log("Transcript timeout reached, finalizing user input");
+        console.log("Transcript timeout reached, finalizing accumulated user input");
         finalizeUserTranscript();
       }, TRANSCRIPT_FINALIZATION_DELAY);
     }
@@ -88,8 +105,8 @@ export const useTranscriptManager = () => {
       userTranscriptTimeoutRef.current = null;
     }
     
-    if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
-      console.log("Finalizing interrupted user transcript:", pendingUserTranscriptRef.current);
+    if (isUserTurnRef.current && accumulatedUserTextRef.current.trim()) {
+      console.log("Finalizing interrupted accumulated user transcript:", accumulatedUserTextRef.current);
       return finalizeUserTranscript();
     }
     return null;
@@ -113,9 +130,9 @@ export const useTranscriptManager = () => {
       isAiTurnRef.current = false;
     }
     
-    // Then finalize user transcript if exists
-    if (isUserTurnRef.current && pendingUserTranscriptRef.current.trim()) {
-      console.log("Finalizing user transcript on turn complete:", pendingUserTranscriptRef.current);
+    // Then finalize accumulated user transcript if exists
+    if (isUserTurnRef.current && accumulatedUserTextRef.current.trim()) {
+      console.log("Finalizing accumulated user transcript on turn complete:", accumulatedUserTextRef.current);
       const entry = finalizeUserTranscript();
       if (entry) results.push(entry);
     }
@@ -145,6 +162,7 @@ export const useTranscriptManager = () => {
     pendingUserTranscriptRef.current = "";
     pendingAiTranscriptRef.current = "";
     lastUserTextRef.current = "";
+    accumulatedUserTextRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
     setTranscript([]);
