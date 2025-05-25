@@ -98,24 +98,41 @@ const Index = () => {
       }
     }
 
-    // Handle input transcription with improved logging
+    // Handle dedicated input transcription messages
     if (message.serverContent?.inputTranscription) {
-      const transcriptText = message.serverContent.inputTranscription.text || "";
-      // Safely access isPartial property with fallback
-      const isPartial = (message.serverContent.inputTranscription as any).isPartial !== false;
+      const transcription = message.serverContent.inputTranscription;
+      const transcriptText = transcription.text || "";
+      
+      // Check if this is a partial transcription - according to the API docs,
+      // transcriptions are sent independently and may not have explicit partial flags
+      // We'll assume continuous transcriptions without explicit finalization are partial
+      const isPartial = true; // Most transcriptions from the Live API are partial until turn complete
       
       console.log("Input transcription received:", {
         text: transcriptText,
         isPartial: isPartial,
         length: transcriptText.length,
-        fullTranscription: message.serverContent.inputTranscription
+        fullTranscription: transcription
       });
       
-      // Process transcription with proper partial handling
-      const userEntry = handleUserTranscript(transcriptText, isPartial);
-      if (userEntry) {
-        console.log("Processing finalized user transcript for extraction:", userEntry);
-        extractQualificationData(userEntry, updateQualificationData);
+      if (transcriptText.trim()) {
+        const userEntry = handleUserTranscript(transcriptText, isPartial);
+        if (userEntry) {
+          console.log("Processing finalized user transcript for extraction:", userEntry);
+          extractQualificationData(userEntry, updateQualificationData);
+        }
+      }
+    }
+
+    // Handle output transcription
+    if (message.serverContent?.outputTranscription) {
+      const transcription = message.serverContent.outputTranscription;
+      const transcriptText = transcription.text || "";
+      
+      console.log("Output transcription received:", transcriptText);
+      
+      if (transcriptText.trim()) {
+        handleAiTranscript(transcriptText);
       }
     }
 
@@ -148,7 +165,7 @@ const Index = () => {
     }
 
     if (message.serverContent?.turnComplete) {
-      console.log("Turn complete detected");
+      console.log("Turn complete detected - finalizing transcriptions");
       const entries = handleTurnComplete();
       entries.forEach(entry => {
         if (entry.speaker === "Usuário") {
@@ -159,6 +176,7 @@ const Index = () => {
     }
 
     if (message.serverContent?.generationComplete) {
+      console.log("Generation complete detected");
       handleGenerationComplete();
     }
   };

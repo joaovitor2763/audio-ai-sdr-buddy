@@ -72,6 +72,20 @@ export const useGeminiSession = () => {
         enabled: true,
         mode: 'CONTINUOUS'
       },
+      outputAudioTranscription: {
+        enabled: true
+      },
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          disabled: false,
+          startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+          prefixPaddingMs: 300,
+          endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+          silenceDurationMs: 800
+        },
+        activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
+        turnCoverage: 'TURN_INCLUDES_ONLY_ACTIVITY'
+      },
       systemInstruction: {
         parts: [{
           text: `Você é Mari, uma SDR (Sales Development Representative) da G4 Educação, especializada em qualificação consultiva de leads. Seu objetivo é conduzir uma conversa natural e humana, sempre em português do Brasil, para entender o contexto do lead, coletar as informações essenciais e agendar uma reunião com um especialista.
