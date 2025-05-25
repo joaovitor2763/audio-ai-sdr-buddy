@@ -73,9 +73,15 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
     lastProcessTimeRef.current = now;
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const systemPrompt = `Você é um especialista em análise de dados de qualificação de leads para a G4 Educação. 
+      const ai = new GoogleGenAI({
+        apiKey: apiKey,
+      });
+
+      const config = {
+        responseMimeType: 'application/json',
+        systemInstruction: [
+          {
+            text: `Você é um especialista em análise de dados de qualificação de leads para a G4 Educação. 
 
 TAREFA: Analise a conversa recente e extraia/atualize informações de qualificação baseado no contexto completo.
 
@@ -110,19 +116,35 @@ FORMATO DE RESPOSTA (JSON):
 {
   "campo_identificado": "valor",
   "campo_identificado_confidence": "high|medium|low"
-}`;
+}`
+          }
+        ],
+      };
 
-      const model = ai.getGenerativeModel({ 
-        model: "gemini-2.0-flash-lite",
-        generationConfig: {
-          temperature: 0.1,
-          topP: 0.8,
-          maxOutputTokens: 1000,
-        }
+      const model = 'gemini-2.0-flash-lite';
+      const contents = [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: `Analise a conversa e extraia dados de qualificação: ${conversationBufferRef.current.map(entry => `${entry.speaker}: ${entry.text}`).join('\n')}`
+            },
+          ],
+        },
+      ];
+
+      const response = await ai.models.generateContentStream({
+        model,
+        config,
+        contents,
       });
 
-      const result = await model.generateContent(systemPrompt);
-      const responseText = result.response.text();
+      let responseText = '';
+      for await (const chunk of response) {
+        if (chunk.text) {
+          responseText += chunk.text;
+        }
+      }
       
       console.log('Gemini 2.0 Flash Lite qualification response:', responseText);
 
