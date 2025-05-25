@@ -15,11 +15,10 @@ export const useTranscriptManager = () => {
   const isUserTurnRef = useRef(false);
   const isAiTurnRef = useRef(false);
   const userTranscriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastPartialTextRef = useRef<string>("");
-  const lastFinalTextRef = useRef<string>("");
+  const lastUserTextRef = useRef<string>("");
 
-  // Reduced delay for better responsiveness but still allowing sentence completion
-  const TRANSCRIPT_FINALIZATION_DELAY = 1500;
+  // Increased delay for better sentence completion
+  const TRANSCRIPT_FINALIZATION_DELAY = 2000;
 
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
@@ -29,12 +28,11 @@ export const useTranscriptManager = () => {
   }, []);
 
   const finalizeUserTranscript = useCallback(() => {
-    if (pendingUserTranscriptRef.current.trim()) {
+    if (pendingUserTranscriptRef.current.trim() && pendingUserTranscriptRef.current !== lastUserTextRef.current) {
       console.log("Finalizing user transcript:", pendingUserTranscriptRef.current);
       const entry = addToTranscript("Usuário", pendingUserTranscriptRef.current.trim());
+      lastUserTextRef.current = pendingUserTranscriptRef.current;
       pendingUserTranscriptRef.current = "";
-      lastPartialTextRef.current = "";
-      lastFinalTextRef.current = "";
       isUserTurnRef.current = false;
       return entry;
     }
@@ -46,57 +44,31 @@ export const useTranscriptManager = () => {
       text: transcriptText,
       isPartial: isPartial,
       length: transcriptText.length,
-      lastPartial: lastPartialTextRef.current,
-      lastFinal: lastFinalTextRef.current
+      isDifferent: transcriptText !== lastUserTextRef.current
     });
     
-    // Handle final transcriptions immediately
-    if (!isPartial) {
-      console.log("Final transcript received, processing immediately");
-      
-      // Clear any existing timeout
-      if (userTranscriptTimeoutRef.current) {
-        clearTimeout(userTranscriptTimeoutRef.current);
-        userTranscriptTimeoutRef.current = null;
-      }
-      
-      // Only process if this is new content
-      if (transcriptText.trim() && transcriptText !== lastFinalTextRef.current) {
-        lastFinalTextRef.current = transcriptText;
-        pendingUserTranscriptRef.current = transcriptText;
-        return finalizeUserTranscript();
-      }
+    // Skip if text hasn't changed meaningfully
+    if (!transcriptText.trim() || transcriptText === lastUserTextRef.current) {
       return null;
     }
+
+    // For input transcriptions from Live API, we get continuous updates
+    // We'll accumulate the text and finalize it after a delay
+    pendingUserTranscriptRef.current = transcriptText;
+    isUserTurnRef.current = true;
     
-    // Handle partial transcriptions
-    if (isPartial) {
-      // Only update if the new text is meaningfully different
-      const textChanged = transcriptText !== lastPartialTextRef.current;
-      const isLonger = transcriptText.length > lastPartialTextRef.current.length;
-      const isDifferentContent = !transcriptText.startsWith(lastPartialTextRef.current.substring(0, Math.min(15, lastPartialTextRef.current.length)));
-      
-      if (textChanged && (isLonger || isDifferentContent)) {
-        pendingUserTranscriptRef.current = transcriptText;
-        lastPartialTextRef.current = transcriptText;
-        isUserTurnRef.current = true;
-        
-        console.log("Updated partial transcript:", transcriptText);
-        
-        // Clear any existing timeout
-        if (userTranscriptTimeoutRef.current) {
-          clearTimeout(userTranscriptTimeoutRef.current);
-        }
-        
-        // Set timeout for partial results - only if we have substantial content
-        if (transcriptText.trim().length > 10) {
-          userTranscriptTimeoutRef.current = setTimeout(() => {
-            console.log("Transcript timeout reached, finalizing user input");
-            finalizeUserTranscript();
-          }, TRANSCRIPT_FINALIZATION_DELAY);
-        }
-      }
-      return null;
+    // Clear any existing timeout
+    if (userTranscriptTimeoutRef.current) {
+      clearTimeout(userTranscriptTimeoutRef.current);
+    }
+    
+    // Set timeout to finalize transcript after user stops speaking
+    // Only if we have substantial content
+    if (transcriptText.trim().length > 5) {
+      userTranscriptTimeoutRef.current = setTimeout(() => {
+        console.log("Transcript timeout reached, finalizing user input");
+        finalizeUserTranscript();
+      }, TRANSCRIPT_FINALIZATION_DELAY);
     }
     
     return null;
@@ -172,8 +144,7 @@ export const useTranscriptManager = () => {
     
     pendingUserTranscriptRef.current = "";
     pendingAiTranscriptRef.current = "";
-    lastPartialTextRef.current = "";
-    lastFinalTextRef.current = "";
+    lastUserTextRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
     setTranscript([]);

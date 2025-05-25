@@ -98,25 +98,20 @@ const Index = () => {
       }
     }
 
-    // Handle dedicated input transcription messages
+    // Handle input transcription (what the user said)
     if (message.serverContent?.inputTranscription) {
       const transcription = message.serverContent.inputTranscription;
       const transcriptText = transcription.text || "";
       
-      // Check if this is a partial transcription - according to the API docs,
-      // transcriptions are sent independently and may not have explicit partial flags
-      // We'll assume continuous transcriptions without explicit finalization are partial
-      const isPartial = true; // Most transcriptions from the Live API are partial until turn complete
-      
-      console.log("Input transcription received:", {
+      console.log("Input transcription received from Live API:", {
         text: transcriptText,
-        isPartial: isPartial,
         length: transcriptText.length,
         fullTranscription: transcription
       });
       
       if (transcriptText.trim()) {
-        const userEntry = handleUserTranscript(transcriptText, isPartial);
+        // For Live API input transcriptions, we treat them as continuous updates
+        const userEntry = handleUserTranscript(transcriptText, true);
         if (userEntry) {
           console.log("Processing finalized user transcript for extraction:", userEntry);
           extractQualificationData(userEntry, updateQualificationData);
@@ -124,7 +119,7 @@ const Index = () => {
       }
     }
 
-    // Handle output transcription
+    // Handle output transcription (what Mari said)
     if (message.serverContent?.outputTranscription) {
       const transcription = message.serverContent.outputTranscription;
       const transcriptText = transcription.text || "";
@@ -136,6 +131,7 @@ const Index = () => {
       }
     }
 
+    // Handle tool calls
     if (message.toolCall) {
       message.toolCall.functionCalls?.forEach(functionCall => {
         console.log(`Execute function ${functionCall.name} with arguments:`, functionCall.args);
@@ -152,6 +148,7 @@ const Index = () => {
       sendToolResponse(message.toolCall.functionCalls || []);
     }
 
+    // Handle model audio and text responses
     if (message.serverContent?.modelTurn?.parts) {
       const part = message.serverContent.modelTurn.parts[0];
 
@@ -164,6 +161,7 @@ const Index = () => {
       }
     }
 
+    // Handle turn completion
     if (message.serverContent?.turnComplete) {
       console.log("Turn complete detected - finalizing transcriptions");
       const entries = handleTurnComplete();
@@ -175,6 +173,7 @@ const Index = () => {
       });
     }
 
+    // Handle generation completion
     if (message.serverContent?.generationComplete) {
       console.log("Generation complete detected");
       handleGenerationComplete();

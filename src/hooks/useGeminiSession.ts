@@ -15,7 +15,7 @@ export const useGeminiSession = () => {
 
   const createSession = useCallback(async (config: GeminiSessionConfig) => {
     const ai = new GoogleGenAI({ apiKey: config.apiKey });
-    const model = 'models/gemini-2.5-flash-preview-native-audio-dialog';
+    const model = 'gemini-2.5-flash-preview-native-audio-dialog';
 
     const tools = [{
       functionDeclarations: [{
@@ -81,7 +81,7 @@ export const useGeminiSession = () => {
           startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
           prefixPaddingMs: 300,
           endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
-          silenceDurationMs: 800
+          silenceDurationMs: 1200
         },
         activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
         turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY
