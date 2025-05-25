@@ -52,6 +52,13 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
   const processingRef = useRef<boolean>(false);
   const lastProcessTimeRef = useRef<number>(0);
   const fullConversationRef = useRef<ConversationEntry[]>([]);
+  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastConversationHashRef = useRef<string>('');
+
+  // Generate a simple hash of the conversation to detect actual changes
+  const generateConversationHash = (conversation: ConversationEntry[]): string => {
+    return conversation.map(entry => `${entry.speaker}:${entry.text}`).join('|');
+  };
 
   const processQualificationData = useCallback(async (
     newEntry: ConversationEntry,
@@ -78,39 +85,56 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
+    // Check if conversation actually changed
+    const currentHash = generateConversationHash(fullConversationRef.current);
+    if (currentHash === lastConversationHashRef.current) {
+      console.log('No conversation changes detected, skipping qualification processing');
+      return;
+    }
+
     // Prevent concurrent processing
     if (processingRef.current) {
       console.log('Qualification processing already in progress, skipping');
       return;
     }
 
-    // Rate limiting - process at most every 2 seconds for better context accumulation
+    // Rate limiting - process at most every 3 seconds for better context accumulation
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 2000) {
+    if (now - lastProcessTimeRef.current < 3000) {
       console.log('Rate limiting qualification processing');
+      
+      // Clear existing timeout and set new one
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
+      
+      processingTimeoutRef.current = setTimeout(() => {
+        if (!processingRef.current) {
+          processQualificationData(newEntry, currentData, onDataUpdate, onLogEntry);
+        }
+      }, 3000 - (now - lastProcessTimeRef.current));
+      
       return;
     }
 
     processingRef.current = true;
     lastProcessTimeRef.current = now;
+    lastConversationHashRef.current = currentHash;
+
+    // Clear any pending timeout
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
 
     try {
       const ai = new GoogleGenAI({
         apiKey: apiKey,
       });
 
-      // Build structured conversation context with both user and Mari responses
-      const userResponses = fullConversationRef.current
-        .filter(entry => entry.speaker === "Usuário")
-        .map(entry => `USUÁRIO: ${entry.text}`)
-        .join('\n');
-
-      const mariResponses = fullConversationRef.current
-        .filter(entry => entry.speaker === "Mari")
-        .map(entry => `MARI: ${entry.text}`)
-        .join('\n');
-
-      const fullConversation = fullConversationRef.current
+      // Build chronological conversation context
+      const chronologicalConversation = fullConversationRef.current
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
         .map(entry => {
           if (entry.speaker === "Usuário") {
             return `USUÁRIO: ${entry.text}`;
@@ -122,56 +146,55 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
         })
         .join('\n');
 
-      console.log('=== FULL CONVERSATION CONTEXT FOR QUALIFICATION ===');
+      console.log('=== QUALIFICATION PROCESSING ===');
       console.log('Total conversation entries:', fullConversationRef.current.length);
-      console.log('User responses:', userResponses);
-      console.log('Mari responses:', mariResponses);
-      console.log('Full conversation:', fullConversation);
+      console.log('Chronological conversation:', chronologicalConversation);
 
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas completas.
+            text: `Você é um especialista em extração de dados de qualificação de leads a partir de conversas de vendas.
 
-TAREFA: Extraia informações de qualificação usando AMBAS as falas do USUÁRIO e as respostas/confirmações da MARI.
+TAREFA: Extraia informações de qualificação usando AMBAS as falas do USUÁRIO e as confirmações/correções da MARI.
 
 PRIORIDADE DE FONTES:
-1. PRIMEIRA PRIORIDADE: Informações explícitas do USUÁRIO
-2. SEGUNDA PRIORIDADE: Confirmações/correções da MARI (quando o usuário não foi claro)
-3. Use Mari para validar/corrigir dados quando a transcrição do usuário parecer incorreta
+1. PRIMEIRA PRIORIDADE: Informações explícitas fornecidas pelo USUÁRIO
+2. SEGUNDA PRIORIDADE: Confirmações/correções da MARI quando o usuário não foi claro
+3. TERCEIRA PRIORIDADE: Inferências baseadas no contexto da conversa
 
 INSTRUÇÕES DE EXTRAÇÃO:
-- PRESERVE todos os detalhes e contexto completos mencionados
-- Se Mari corrige ou confirma algo (ex: "Obrigada, João Vítor" quando usuário disse "John Vitor"), use a versão da Mari
-- Para campos não mencionados explicitamente: "Informação não abordada na call"
-- Mantenha nuances importantes (ex: "conteúdos no Instagram" NÃO simplifique para apenas "Instagram")
+- PRESERVE todos os detalhes e contexto completos mencionados pelo usuário
+- Use as confirmações da Mari para validar/corrigir quando a transcrição parecer incorreta
+- Para campos não mencionados: "Informação não abordada na call"
+- Mantenha nuances importantes e contexto específico
 
 CAMPOS PARA EXTRAIR:
-- nome_completo: Nome do lead (priorize correções da Mari se houver)
-- nome_empresa: Nome da empresa mencionada
-- como_conheceu_g4: Como conheceu a G4 (preserve detalhes completos)
-- faturamento_anual_aproximado: Faturamento mencionado (formato original)
+- nome_completo: Nome completo do lead
+- nome_empresa: Nome da empresa do lead
+- como_conheceu_g4: Como conheceu a G4 (preservar detalhes completos como "conteúdos no Instagram", "anúncios no Facebook", etc.)
+- faturamento_anual_aproximado: Faturamento mencionado (manter formato original como "100 milhões por ano")
 - total_funcionarios_empresa: Número de funcionários (apenas número)
-- setor_empresa: Setor de atuação
-- principal_desafio: Principal desafio mencionado
-- melhor_dia_contato_especialista: Preferência de dia
-- melhor_horario_contato_especialista: Preferência de horário
-- preferencia_contato_especialista: Preferência de canal
-- telefone: Número de telefone
+- setor_empresa: Setor/área de atuação da empresa
+- principal_desafio: Principal desafio ou problema mencionado
+- melhor_dia_contato_especialista: Dia preferido para contato
+- melhor_horario_contato_especialista: Horário preferido para contato  
+- preferencia_contato_especialista: Canal preferido (WhatsApp, telefone, email, etc.)
+- telefone: Número de telefone mencionado
 - analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Observações sobre a extração e fontes utilizadas
+- extraction_notes: Observações sobre a extração, fontes utilizadas e contexto
 
 EXEMPLOS DE EXTRAÇÃO INTELIGENTE:
-- Usuário: "John Vitor" → Mari: "Obrigada, João Vítor" → {"nome_completo": "João Vítor", "extraction_notes": "Nome corrigido baseado na confirmação da Mari"}
+- Usuário: "John Vitor" → Mari: "Obrigada, João Vítor" → {"nome_completo": "João Vítor"}
 - Usuário: "conteúdos no Instagram" → {"como_conheceu_g4": "conteúdos no Instagram"}
-- Usuário: "400 milhões por ano" → {"faturamento_anual_aproximado": "400 milhões por ano"}
+- Usuário: "Empreende Brasil" → Mari: "porte da Empreende Brasil" → {"nome_empresa": "Empreende Brasil"}
+- Usuário: "100 milhões por ano" → {"faturamento_anual_aproximado": "100 milhões por ano"}
 
 REGRAS IMPORTANTES:
 - NÃO simplifique informações - preserve contexto completo
-- Use Mari para validar/corrigir quando necessário
-- Para funcionários, extraia apenas o número
-- Seja específico nas extraction_notes sobre qual fonte foi usada`
+- Use Mari para validar/corrigir apenas quando necessário
+- Para funcionários, extraia apenas o número final
+- Seja específico nas extraction_notes sobre qual fonte foi utilizada`
           }
         ],
       };
@@ -182,19 +205,13 @@ REGRAS IMPORTANTES:
           role: 'user',
           parts: [
             {
-              text: `CONVERSA COMPLETA PARA ANÁLISE:
-${fullConversation}
-
-RESPOSTAS DO USUÁRIO:
-${userResponses}
-
-RESPOSTAS DA MARI (para confirmações/correções):
-${mariResponses}
+              text: `CONVERSA COMPLETA PARA ANÁLISE (ordenada cronologicamente):
+${chronologicalConversation}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Extraia dados de qualificação usando ambas as fontes (usuário prioritário, Mari para confirmações/correções):`
+Extraia dados de qualificação preservando contexto e nuances completas das respostas do usuário:`
             },
           ],
         },
@@ -202,9 +219,7 @@ Extraia dados de qualificação usando ambas as fontes (usuário prioritário, M
 
       console.log('=== SENDING TO GEMINI 2.5 FLASH FOR QUALIFICATION ===');
       console.log('Current data:', currentData);
-      console.log('User responses length:', userResponses.length);
-      console.log('Mari responses length:', mariResponses.length);
-      console.log('Full conversation length:', fullConversation.length);
+      console.log('Conversation length:', chronologicalConversation.length);
 
       const response = await ai.models.generateContent({
         model,
@@ -242,7 +257,7 @@ Extraia dados de qualificação usando ambas as fontes (usuário prioritário, M
             // Convert total_funcionarios_empresa to number
             let processedValue = value;
             if (key === 'total_funcionarios_empresa' && typeof value === 'string') {
-              // Extract number from strings like "250 funcionários" or "250"
+              // Extract number from strings like "80 funcionários" or "80"
               const numMatch = value.match(/\d+/);
               if (numMatch) {
                 const numValue = parseInt(numMatch[0]);
@@ -328,6 +343,12 @@ Extraia dados de qualificação usando ambas as fontes (usuário prioritário, M
     fullConversationRef.current = [];
     processingRef.current = false;
     lastProcessTimeRef.current = 0;
+    lastConversationHashRef.current = '';
+    
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
   }, []);
 
   return {
