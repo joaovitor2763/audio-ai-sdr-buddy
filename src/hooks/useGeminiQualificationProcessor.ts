@@ -1,3 +1,4 @@
+
 import { useCallback, useRef } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
@@ -49,17 +50,11 @@ interface StructuredQualificationOutput {
 
 export const useGeminiQualificationProcessor = (apiKey: string) => {
   const processingRef = useRef<boolean>(false);
-  const lastProcessTimeRef = useRef<number>(0);
   const fullConversationRef = useRef<ConversationEntry[]>([]);
-  const lastEntryHashRef = useRef<string>('');
+  const lastFullProcessRef = useRef<number>(0);
 
-  // Generate a hash of just the new entry to detect actual new content
-  const generateEntryHash = (entry: ConversationEntry): string => {
-    return `${entry.speaker}:${entry.text}:${entry.timestamp.getTime()}`;
-  };
-
-  const processQualificationData = useCallback(async (
-    newEntry: ConversationEntry,
+  const processFullConversation = useCallback(async (
+    conversationHistory: ConversationEntry[],
     currentData: Partial<QualificationData>,
     onDataUpdate: (data: Partial<QualificationData>) => void,
     onLogEntry: (logEntry: QualificationLogEntry) => void
@@ -69,112 +64,94 @@ export const useGeminiQualificationProcessor = (apiKey: string) => {
       return;
     }
 
-    // Generate hash for this specific entry
-    const entryHash = generateEntryHash(newEntry);
-    
-    // Skip if we already processed this exact entry
-    if (entryHash === lastEntryHashRef.current) {
-      console.log('Skipping duplicate entry processing:', newEntry.text);
-      return;
-    }
-
-    // Only process meaningful entries from users
-    if (newEntry.speaker !== 'Usuário' || newEntry.text.trim().length < 3) {
-      console.log('Skipping qualification processing - not a meaningful user entry:', newEntry);
-      return;
-    }
-
     // Prevent concurrent processing
     if (processingRef.current) {
-      console.log('Qualification processing already in progress, skipping');
+      console.log('Full conversation processing already in progress, skipping');
       return;
     }
 
-    // Simple rate limiting - process at most every 2 seconds
+    // Rate limiting - process at most every 3 seconds for full conversation
     const now = Date.now();
-    if (now - lastProcessTimeRef.current < 2000) {
-      console.log('Rate limiting qualification processing');
+    if (now - lastFullProcessRef.current < 3000) {
+      console.log('Rate limiting full conversation processing');
       return;
     }
 
     processingRef.current = true;
-    lastProcessTimeRef.current = now;
-    lastEntryHashRef.current = entryHash;
+    lastFullProcessRef.current = now;
 
-    // Add to conversation history
-    fullConversationRef.current.push(newEntry);
-    
-    // Keep conversation history manageable (last 30 entries)
-    if (fullConversationRef.current.length > 30) {
-      fullConversationRef.current = fullConversationRef.current.slice(-30);
-    }
+    // Update conversation history
+    fullConversationRef.current = [...conversationHistory];
 
     try {
       const ai = new GoogleGenAI({
         apiKey: apiKey,
       });
 
-      // Build focused conversation context - last 10 entries for better context
-      const recentConversation = fullConversationRef.current
-        .slice(-10)
+      // Build complete conversation context
+      const fullConversation = fullConversationRef.current
+        .filter(entry => entry.speaker !== 'System') // Exclude system messages
         .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
         .map(entry => {
           if (entry.speaker === "Usuário") {
             return `USUÁRIO: ${entry.text}`;
           } else if (entry.speaker === "Mari") {
             return `MARI: ${entry.text}`;
-          } else {
-            return `SISTEMA: ${entry.text}`;
           }
+          return `${entry.speaker.toUpperCase()}: ${entry.text}`;
         })
         .join('\n');
 
-      console.log('=== PROCESSING NEW USER ENTRY ===');
-      console.log('New entry:', newEntry.text);
-      console.log('Recent conversation context:', recentConversation);
+      console.log('=== PROCESSING FULL CONVERSATION ===');
+      console.log('Full conversation:', fullConversation);
+      console.log('Current data:', currentData);
 
       const config = {
         responseMimeType: 'application/json',
         systemInstruction: [
           {
-            text: `Você é um especialista em extração de dados de qualificação de leads.
+            text: `Você é um especialista em extração de dados de qualificação de leads para empresas brasileiras.
 
-FOCO: Extraia informações ESPECÍFICAS desta nova entrada do usuário e do contexto recente da conversa.
+TAREFA: Analise toda a conversa e extraia TODAS as informações disponíveis de qualificação.
 
-PRIORIDADES DE EXTRAÇÃO:
-1. PRIMEIRA PRIORIDADE: Informações DIRETAS do usuário na entrada atual
-2. SEGUNDA PRIORIDADE: Confirmações/correções da Mari baseadas na entrada do usuário
-3. TERCEIRA PRIORIDADE: Inferências claras do contexto
+IMPORTANTE - REGRAS DE IDIOMA:
+- SEMPRE responda em português brasileiro
+- IGNORE qualquer texto em outros idiomas na conversa (pode ser erro de transcrição)
+- Se encontrar texto em árabe, chinês ou outros idiomas, DESCONSIDERE completamente
+- Foque apenas nas partes da conversa em português
 
-EXEMPLOS DE EXTRAÇÃO DIRETA:
-- Usuário: "João Vítor" → nome_completo: "João Vítor"
-- Usuário: "Empreende Brasil" → nome_empresa: "Empreende Brasil"
-- Usuário: "conteúdos no Instagram" → como_conheceu_g4: "conteúdos no Instagram"
-- Usuário: "100 milhões por ano" → faturamento_anual_aproximado: "100 milhões por ano"
-- Usuário: "80 funcionários" → total_funcionarios_empresa: "80"
-- Usuário: "setor de eventos" → setor_empresa: "setor de eventos"
-- Usuário: "expandir para novos mercados" → principal_desafio: "expandir para novos mercados"
-
-CAMPOS PARA EXTRAIR:
-- nome_completo: Nome completo do lead
-- nome_empresa: Nome da empresa
-- como_conheceu_g4: Como conheceu a G4 (preservar exato: "Instagram", "Facebook", etc.)
-- faturamento_anual_aproximado: Faturamento (manter formato original)
+DADOS PARA EXTRAIR:
+- nome_completo: Nome completo da pessoa
+- nome_empresa: Nome da empresa (ex: "Empreende Brasil", "G4 Educação")
+- como_conheceu_g4: Como conheceu o G4 (ex: "Instagram", "LinkedIn", "indicação")
+- faturamento_anual_aproximado: Faturamento da empresa (preservar formato original)
 - total_funcionarios_empresa: Número de funcionários (apenas número)
 - setor_empresa: Setor/área de atuação
 - principal_desafio: Principal desafio mencionado
-- melhor_dia_contato_especialista: Dia preferido
+- melhor_dia_contato_especialista: Dia preferido para contato
 - melhor_horario_contato_especialista: Horário preferido
-- preferencia_contato_especialista: Canal preferido
-- telefone: Número de telefone
+- preferencia_contato_especialista: Canal preferido (Ligação/WhatsApp)
+- telefone: Telefone para contato
 - analysis_confidence: "alta", "média" ou "baixa"
-- extraction_notes: Observações sobre o que foi extraído
+- extraction_notes: Observações sobre a extração
 
-REGRAS:
-- Se não há informação clara: "Informação não abordada na call"
+ESTRATÉGIA DE EXTRAÇÃO:
+1. PRIORIDADE MÁXIMA: Respostas diretas do usuário
+2. SEGUNDA PRIORIDADE: Confirmações da Mari baseadas em respostas do usuário
+3. TERCEIRA PRIORIDADE: Inferências do contexto da conversa
+
+EXEMPLOS DE EXTRAÇÃO:
+- Usuário: "Meu nome é João Vítor" → nome_completo: "João Vítor"
+- Usuário: "A minha empresa é Empreende Brasil" → nome_empresa: "Empreende Brasil"
+- Mari: "Obrigada, João Vítor" (após pergunta sobre nome) → nome_completo: "João Vítor"
+- Mari: "porte da Empreende Brasil" → nome_empresa: "Empreende Brasil"
+
+REGRAS IMPORTANTES:
+- Se não há informação clara: "Informação não identificada"
 - Para funcionários: extrair apenas o número
-- Preservar contexto e detalhes específicos
-- Focar na NOVA informação da entrada atual`
+- Preservar exatamente como mencionado
+- Considerar toda a conversa, não apenas partes isoladas
+- SEMPRE responder em português brasileiro`
           }
         ],
       };
@@ -185,23 +162,19 @@ REGRAS:
           role: 'user',
           parts: [
             {
-              text: `NOVA ENTRADA DO USUÁRIO PARA PROCESSAR:
-"${newEntry.text}"
-
-CONTEXTO RECENTE DA CONVERSA:
-${recentConversation}
+              text: `CONVERSA COMPLETA PARA ANÁLISE:
+${fullConversation}
 
 DADOS ATUALMENTE CAPTURADOS:
 ${JSON.stringify(currentData, null, 2)}
 
-Extraia APENAS informações novas/atualizadas desta entrada específica do usuário:`
+Analise toda a conversa e extraia TODAS as informações de qualificação disponíveis:`
             },
           ],
         },
       ];
 
-      console.log('=== SENDING TO GEMINI FOR FOCUSED EXTRACTION ===');
-      console.log('Processing entry:', newEntry.text);
+      console.log('=== SENDING FULL CONVERSATION TO GEMINI ===');
 
       const response = await ai.models.generateContent({
         model,
@@ -211,14 +184,14 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
 
       const responseText = response.text || '';
       
-      console.log('=== GEMINI EXTRACTION RESPONSE ===');
+      console.log('=== GEMINI FULL EXTRACTION RESPONSE ===');
       console.log('Raw response:', responseText);
 
       try {
         const cleanedResponse = responseText.replace(/```json\n?|\n?```/g, '').trim();
         const extractedData: StructuredQualificationOutput = JSON.parse(cleanedResponse);
         
-        console.log('Parsed extraction:', extractedData);
+        console.log('Parsed full extraction:', extractedData);
         
         // Process extracted data and create updates
         const updates: Partial<QualificationData> = {};
@@ -229,7 +202,7 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
             return;
           }
 
-          if (value && value !== '' && value !== 'Informação não abordada na call') {
+          if (value && value !== '' && value !== 'Informação não identificada' && value !== 'Informação não abordada na call') {
             const oldValue = currentData[key as keyof QualificationData];
             
             // Convert total_funcionarios_empresa to number
@@ -249,7 +222,7 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
               (updates as any)[key] = processedValue;
               hasUpdates = true;
               
-              console.log(`Updating field ${key}: ${oldValue} → ${processedValue}`);
+              console.log(`Full conversation update - ${key}: ${oldValue} → ${processedValue}`);
               
               onLogEntry({
                 timestamp: new Date(),
@@ -265,7 +238,7 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
         });
 
         if (hasUpdates) {
-          console.log('Applying qualification updates:', updates);
+          console.log('Applying full conversation updates:', updates);
           onDataUpdate(updates);
           
           if (extractedData.extraction_notes) {
@@ -273,38 +246,38 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
               timestamp: new Date(),
               field: 'system',
               oldValue: null,
-              newValue: `Analysis: ${extractedData.extraction_notes}`,
+              newValue: `Full Analysis: ${extractedData.extraction_notes}`,
               source: 'ai',
               confidence: extractedData.analysis_confidence === 'alta' ? 'high' : 
                         extractedData.analysis_confidence === 'média' ? 'medium' : 'low'
             });
           }
         } else {
-          console.log('No new qualification data extracted from this entry');
+          console.log('No new qualification data from full conversation analysis');
         }
 
       } catch (parseError) {
-        console.error('Error parsing qualification extraction:', parseError);
+        console.error('Error parsing full conversation extraction:', parseError);
         console.error('Raw response was:', responseText);
         
         onLogEntry({
           timestamp: new Date(),
           field: 'system',
           oldValue: null,
-          newValue: 'Processing error: Invalid extraction format',
+          newValue: 'Full conversation processing error: Invalid format',
           source: 'system',
           confidence: 'low'
         });
       }
 
     } catch (error) {
-      console.error('Error in qualification processing:', error);
+      console.error('Error in full conversation processing:', error);
       
       onLogEntry({
         timestamp: new Date(),
         field: 'system',
         oldValue: null,
-        newValue: `Error: ${error.message}`,
+        newValue: `Full conversation error: ${error.message}`,
         source: 'system',
         confidence: 'low'
       });
@@ -316,12 +289,11 @@ Extraia APENAS informações novas/atualizadas desta entrada específica do usu�
   const resetProcessor = useCallback(() => {
     fullConversationRef.current = [];
     processingRef.current = false;
-    lastProcessTimeRef.current = 0;
-    lastEntryHashRef.current = '';
+    lastFullProcessRef.current = 0;
   }, []);
 
   return {
-    processQualificationData,
+    processFullConversation,
     resetProcessor
   };
 };
