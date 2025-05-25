@@ -74,6 +74,11 @@ export const useAudioProcessor = () => {
   
   const stopAudioProcessing = useCallback(() => {
     if (audioWorkletRef.current) {
+      try {
+        audioWorkletRef.current.port.postMessage({ type: 'flush' });
+      } catch (e) {
+        console.error('Error flushing audio buffer:', e);
+      }
       audioWorkletRef.current.disconnect();
       audioWorkletRef.current = null;
     }
