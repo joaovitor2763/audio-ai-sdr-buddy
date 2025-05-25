@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/genai';
 
 interface TranscriptionSegment {
   text: string;
@@ -8,11 +8,11 @@ interface TranscriptionSegment {
 }
 
 export class TranscriptionCleaner {
-  private ai: GoogleGenAI;
-  private model = 'gemini-2.0-flash-lite';
+  private genAI: GoogleGenerativeAI;
+  private model = 'gemini-2.0-flash-exp';
 
   constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+    this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
   async cleanTranscription(
@@ -55,25 +55,16 @@ Output: "pode sim"
 
 Return only the cleaned transcription:`;
 
-      const response = await this.ai.models.generateContent({
-        model: this.model,
-        contents: [{
-          role: 'user',
-          parts: [{ text: prompt }]
-        }],
-        config: {
-          temperature: 0.1,
-          maxOutputTokens: 200
-        }
-      });
-
-      const cleanedText = response.response.text()?.trim() || currentAccumulated;
+      const model = this.genAI.getGenerativeModel({ model: this.model });
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const cleanedText = response.text()?.trim() || currentAccumulated;
       
       // Additional safety cleanup
       return this.postProcessText(cleanedText);
       
     } catch (error) {
-      console.error('Error cleaning transcription with Gemini 2.0 Flash Lite:', error);
+      console.error('Error cleaning transcription with Gemini:', error);
       // Fallback to basic cleaning
       return this.basicCleanup(currentAccumulated);
     }
