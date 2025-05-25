@@ -22,8 +22,10 @@ export const useTranscriptManager = (apiKey?: string) => {
   const isUserTurnRef = useRef(false);
   const isAiTurnRef = useRef(false);
   const lastUserTextRef = useRef<string>("");
+  const lastProcessedUserTextRef = useRef<string>("");
   const cleanerRef = useRef<TranscriptionCleaner | null>(null);
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastUserSegmentRef = useRef<string>("");
 
   // Initialize cleaner when API key is available
   const initializeCleaner = useCallback(() => {
@@ -36,12 +38,11 @@ export const useTranscriptManager = (apiKey?: string) => {
   const addToTranscript = useCallback((speaker: string, text: string) => {
     const newEntry = { speaker, text, timestamp: new Date() };
     setTranscript(prev => {
-      // Check for duplicates in the last few entries to prevent spam
-      const recent = prev.slice(-3);
-      const isDuplicate = recent.some(entry => 
+      // More robust duplicate prevention
+      const isDuplicate = prev.some(entry => 
         entry.speaker === speaker && 
-        entry.text === text && 
-        (new Date().getTime() - entry.timestamp.getTime()) < 5000 // Within 5 seconds
+        entry.text.trim() === text.trim() && 
+        (new Date().getTime() - entry.timestamp.getTime()) < 10000 // Within 10 seconds
       );
       
       if (isDuplicate) {
@@ -63,9 +64,9 @@ export const useTranscriptManager = (apiKey?: string) => {
     
     console.log("🔄 Finalizing user transcript with segments:", {
       segmentCount: segments.length,
-      segments: segments,
       rawAccumulated,
-      lastUserText: lastUserTextRef.current
+      lastUserText: lastUserTextRef.current,
+      lastProcessedUserText: lastProcessedUserTextRef.current
     });
     
     if (!rawAccumulated.trim() || rawAccumulated.trim() === '<noise>') {
@@ -91,24 +92,34 @@ export const useTranscriptManager = (apiKey?: string) => {
       }
     } else {
       console.log("⚠️ No cleaner available, using basic cleanup");
-      // Basic cleanup fallback
       cleanedText = rawAccumulated.replace(/<noise>/g, '').replace(/\s+/g, ' ').trim();
     }
     
-    if (cleanedText && cleanedText !== lastUserTextRef.current && cleanedText.length >= 2) {
+    // Enhanced duplicate prevention - check against both last user text and last processed text
+    if (cleanedText && 
+        cleanedText !== lastUserTextRef.current && 
+        cleanedText !== lastProcessedUserTextRef.current &&
+        cleanedText.length >= 2 &&
+        !cleanedText.toLowerCase().includes('noise')) {
+      
       console.log("✅ Adding finalized user transcript:", cleanedText);
       const entry = addToTranscript("Usuário", cleanedText);
       lastUserTextRef.current = cleanedText;
+      lastProcessedUserTextRef.current = cleanedText;
       pendingUserSegmentsRef.current = [];
       isUserTurnRef.current = false;
       return entry;
     }
     
-    console.log("❌ Cleaned text not added (duplicate or too short):", { cleanedText, lastUserText: lastUserTextRef.current });
+    console.log("❌ Cleaned text not added (duplicate or too short):", { 
+      cleanedText, 
+      lastUserText: lastUserTextRef.current,
+      lastProcessedUserText: lastProcessedUserTextRef.current 
+    });
     return null;
   }, [addToTranscript, initializeCleaner]);
 
-  // Debounced user transcript processing
+  // Improved debounced user transcript processing with better deduplication
   const debouncedFinalizeUser = useCallback(() => {
     if (processingTimeoutRef.current) {
       clearTimeout(processingTimeoutRef.current);
@@ -118,20 +129,24 @@ export const useTranscriptManager = (apiKey?: string) => {
       if (isUserTurnRef.current && pendingUserSegmentsRef.current.length > 0) {
         finalizeUserTranscript();
       }
-    }, 1000); // Wait 1 second for more segments
+    }, 1500); // Increased timeout for better segment collection
   }, [finalizeUserTranscript]);
 
-  // Accumulate user input segments during their turn
+  // Improved user transcript handling with better deduplication
   const handleUserTranscript = useCallback((transcriptText: string, isFinal?: boolean) => {
     console.log("🎤 Live API user transcript received:", {
       text: transcriptText,
       isFinal: isFinal,
       length: transcriptText.length,
-      currentTurn: isUserTurnRef.current ? 'user' : 'none'
+      currentTurn: isUserTurnRef.current ? 'user' : 'none',
+      lastSegment: lastUserSegmentRef.current
     });
     
-    // Skip empty content or pure noise
-    if (!transcriptText.trim() || transcriptText.trim() === '<noise>') {
+    // Skip empty content, pure noise, or duplicate segments
+    if (!transcriptText.trim() || 
+        transcriptText.trim() === '<noise>' ||
+        transcriptText.trim() === lastUserSegmentRef.current.trim()) {
+      console.log("❌ Skipping duplicate or empty segment");
       return null;
     }
 
@@ -140,6 +155,17 @@ export const useTranscriptManager = (apiKey?: string) => {
       console.log("🟢 Starting user turn");
       isUserTurnRef.current = true;
       pendingUserSegmentsRef.current = [];
+      lastUserSegmentRef.current = "";
+    }
+    
+    // Check for near-duplicate segments in current collection
+    const isDuplicateSegment = pendingUserSegmentsRef.current.some(segment => 
+      segment.text.trim().toLowerCase() === transcriptText.trim().toLowerCase()
+    );
+    
+    if (isDuplicateSegment) {
+      console.log("❌ Skipping duplicate segment in current collection");
+      return null;
     }
     
     // Add segment to collection
@@ -148,6 +174,8 @@ export const useTranscriptManager = (apiKey?: string) => {
       timestamp: new Date(),
       isFinal: !!isFinal
     });
+    
+    lastUserSegmentRef.current = transcriptText.trim();
     
     console.log("📥 Added segment to collection, total segments:", pendingUserSegmentsRef.current.length);
     
@@ -246,6 +274,8 @@ export const useTranscriptManager = (apiKey?: string) => {
     pendingUserSegmentsRef.current = [];
     pendingAiTranscriptRef.current = "";
     lastUserTextRef.current = "";
+    lastProcessedUserTextRef.current = "";
+    lastUserSegmentRef.current = "";
     isUserTurnRef.current = false;
     isAiTurnRef.current = false;
     setTranscript([]);
